@@ -5,5 +5,5 @@
  *
  * All existing imports of this path continue to work unchanged.
  */
-export { VoiceSelectorModal } from "@/components/VoiceSelector";
 export type { VoiceSelectorModalProps } from "@/components/VoiceSelector";
+export { VoiceSelectorModal } from "@/components/VoiceSelector";

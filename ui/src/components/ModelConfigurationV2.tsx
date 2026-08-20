@@ -1,6 +1,7 @@
 "use client";
 
 import { ExternalLink } from "lucide-react";
+import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -13,8 +14,6 @@ import type {
     OrganizationAiModelConfigurationResponse,
     OrganizationAiModelConfigurationV2,
 } from "@/client/types.gen";
-import dynamic from "next/dynamic";
-
 import { type ModelConfigurationDefaultsV2 } from "@/components/AIModelConfigurationV2Editor";
 import { Skeleton } from "@/components/ui/skeleton";
 

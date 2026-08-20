@@ -16,7 +16,6 @@ import { OnboardingProvider } from "@/context/OnboardingContext";
 import { OrgConfigProvider } from "@/context/OrgConfigContext";
 import { TelephonyConfigWarningsProvider } from "@/context/TelephonyConfigWarningsContext";
 import { AuthProvider } from "@/lib/auth";
-import { ReactQueryProvider } from "@/components/ReactQueryProvider";
 
 
 const geistSans = Geist({
@@ -71,7 +70,6 @@ export default function RootLayout({
           <AuthProvider>
               <AppConfigProvider>
                 <Suspense fallback={<SpinLoader />}>
-                  <ReactQueryProvider>
                   {/*
                     OrgConfigProvider, TelephonyConfigWarningsProvider, and
                     OnboardingProvider are siblings (not nested parents/children).
@@ -91,7 +89,6 @@ export default function RootLayout({
                       </OnboardingProvider>
                     </TelephonyConfigWarningsProvider>
                   </OrgConfigProvider>
-                  </ReactQueryProvider>
                 </Suspense>
               </AppConfigProvider>
             </AuthProvider>
