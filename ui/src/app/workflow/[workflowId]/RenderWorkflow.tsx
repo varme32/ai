@@ -1,6 +1,5 @@
 import '@xyflow/react/dist/style.css';
 
-import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     Background,
     BackgroundVariant,
@@ -12,7 +11,7 @@ import { useRouter } from 'next/navigation';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createWorkflowDraftApiV1WorkflowWorkflowIdCreateDraftPost, getWorkflowVersionsApiV1WorkflowWorkflowIdVersionsGet, listDocumentsApiV1KnowledgeBaseDocumentsGet, listRecordingsApiV1WorkflowRecordingsGet, listToolsApiV1ToolsGet } from '@/client';
-import type { ToolResponse } from '@/client/types.gen';
+import type { DocumentResponseSchema, RecordingResponseSchema, ToolResponse } from '@/client/types.gen';
 import { useNodeSpecs } from "@/components/flow/renderer";
 import { FlowEdge, FlowNode, NodeType } from "@/components/flow/types";
 import { HireExpertNudge } from "@/components/lead-forms/HireExpertNudge";
@@ -94,33 +93,28 @@ function RenderWorkflow({
     const [currentVersionStatus, setCurrentVersionStatus] = useState<string | null>(initialVersionStatus ?? null);
     const versionsFetched = useRef(false);
     const [activeRuntimeNodeId, setActiveRuntimeNodeId] = useState<string | null>(null);
-    const queryClient = useQueryClient();
+    const [documents, setDocuments] = useState<DocumentResponseSchema[]>([]);
+    const [tools, setTools] = useState<ToolResponse[]>([]);
+    const [recordings, setRecordings] = useState<RecordingResponseSchema[]>([]);
 
-    // Cached API data — React Query caches these for 60s so navigating away
-    // and back is instant on the second visit. All 3 queries run in parallel.
-    const { data: documentsData } = useQuery({
-        queryKey: ['workflow-documents'],
-        queryFn: () => listDocumentsApiV1KnowledgeBaseDocumentsGet({ query: { limit: 100 } }),
-        select: (res) => res.data?.documents ?? [],
-        staleTime: 60_000,
-    });
-    const documents = documentsData;
-
-    const { data: toolsData } = useQuery({
-        queryKey: ['workflow-tools'],
-        queryFn: () => listToolsApiV1ToolsGet({}),
-        select: (res) => res.data ?? [],
-        staleTime: 60_000,
-    });
-    const tools = toolsData;
-
-    const { data: recordingsData } = useQuery({
-        queryKey: ['workflow-recordings'],
-        queryFn: () => listRecordingsApiV1WorkflowRecordingsGet({ query: {} }),
-        select: (res) => res.data?.recordings ?? [],
-        staleTime: 60_000,
-    });
-    const recordings = recordingsData ?? [];
+    useEffect(() => {
+        let isMounted = true;
+        Promise.all([
+            listDocumentsApiV1KnowledgeBaseDocumentsGet({ query: { limit: 100 } }),
+            listToolsApiV1ToolsGet({}),
+            listRecordingsApiV1WorkflowRecordingsGet({ query: {} }),
+        ]).then(([docsRes, toolsRes, recsRes]) => {
+            if (!isMounted) return;
+            setDocuments(docsRes.data?.documents ?? []);
+            setTools(toolsRes.data ?? []);
+            setRecordings(recsRes.data?.recordings ?? []);
+        }).catch((err) => {
+            console.error("Failed to load workflow resources:", err);
+        });
+        return () => {
+            isMounted = false;
+        };
+    }, []);
 
     const {
         rfInstance,
@@ -445,15 +439,13 @@ function RenderWorkflow({
 
     const updateTool = useCallback(
         (toolUuid: string, updater: (tool: ToolResponse) => ToolResponse) => {
-            queryClient.setQueryData(
-                ['workflow-tools'],
-                (prev: ToolResponse[] | undefined) =>
-                    prev?.map((tool) =>
-                        tool.tool_uuid === toolUuid ? updater(tool) : tool,
-                    ),
+            setTools((prev) =>
+                prev.map((tool) =>
+                    tool.tool_uuid === toolUuid ? updater(tool) : tool,
+                ),
             );
         },
-        [queryClient],
+        [],
     );
 
     // Memoize the context value to prevent unnecessary re-renders
