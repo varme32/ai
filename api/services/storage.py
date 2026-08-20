@@ -84,10 +84,14 @@ def get_current_storage_backend() -> StorageBackend:
 
 
 # Create a single storage instance at module load time.
-# In the test environment we skip the real backend so import doesn't require
-# MinIO/S3 to be reachable; tests that need storage must inject a real fs.
-if ENVIRONMENT == Environment.TEST.value:
-    logger.info("ENVIRONMENT=test — using NullFileSystem (no storage backend)")
+# In the test environment, or when storage is explicitly disabled (ENABLE_AWS_S3=False),
+# use NullFileSystem so the server starts without requiring MinIO/S3 to be reachable.
+# Audio recordings won't be saved, but all call/telephony functionality works normally.
+if ENVIRONMENT == Environment.TEST.value or not ENABLE_AWS_S3:
+    logger.info(
+        f"ENVIRONMENT={ENVIRONMENT}, ENABLE_AWS_S3={ENABLE_AWS_S3} — "
+        "using NullFileSystem (audio recordings disabled, no storage backend required)"
+    )
     storage_fs: BaseFileSystem = NullFileSystem()
 else:
     _backend = StorageBackend.get_current_backend()

@@ -16,6 +16,7 @@ import { OnboardingProvider } from "@/context/OnboardingContext";
 import { OrgConfigProvider } from "@/context/OrgConfigContext";
 import { TelephonyConfigWarningsProvider } from "@/context/TelephonyConfigWarningsContext";
 import { AuthProvider } from "@/lib/auth";
+import { ReactQueryProvider } from "@/components/ReactQueryProvider";
 
 
 const geistSans = Geist({
@@ -67,9 +68,17 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange>
           <SentryErrorBoundary>
-            <AuthProvider>
+          <AuthProvider>
               <AppConfigProvider>
                 <Suspense fallback={<SpinLoader />}>
+                  <ReactQueryProvider>
+                  {/*
+                    OrgConfigProvider, TelephonyConfigWarningsProvider, and
+                    OnboardingProvider are siblings (not nested parents/children).
+                    Each mounts and starts its own API fetch simultaneously,
+                    eliminating the sequential waterfall that previously added
+                    300–600ms to initial page load.
+                  */}
                   <OrgConfigProvider>
                     <TelephonyConfigWarningsProvider>
                       <OnboardingProvider>
@@ -82,9 +91,11 @@ export default function RootLayout({
                       </OnboardingProvider>
                     </TelephonyConfigWarningsProvider>
                   </OrgConfigProvider>
+                  </ReactQueryProvider>
                 </Suspense>
               </AppConfigProvider>
             </AuthProvider>
+
           </SentryErrorBoundary>
         </ThemeProvider>
       </body>

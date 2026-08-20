@@ -5,11 +5,18 @@ Shared functions used across the application.
 
 import ipaddress
 import re
+import time
 
 from loguru import logger
 
 from api.constants import BACKEND_API_ENDPOINT
 from api.utils.tunnel import TunnelURLProvider
+
+# In-memory cache for backend endpoint resolution.
+# Avoids hitting cloudflared metrics API on every webhook call.
+_endpoint_cache: tuple[str, str] | None = None
+_endpoint_cache_time: float = 0.0
+_ENDPOINT_CACHE_TTL = 60.0  # Refresh every 60 seconds
 
 
 def get_scheme(url: str) -> str | None:
@@ -150,7 +157,21 @@ async def get_backend_endpoints() -> tuple[str, str]:
     Raises:
         ValueError: If no endpoint URL can be determined or URL is invalid
     """
+    global _endpoint_cache, _endpoint_cache_time
 
+    # Return cached result if still fresh — avoids repeated cloudflared/tunnel lookups
+    now = time.monotonic()
+    if _endpoint_cache is not None and (now - _endpoint_cache_time) < _ENDPOINT_CACHE_TTL:
+        return _endpoint_cache
+
+    result = await _resolve_backend_endpoints()
+    _endpoint_cache = result
+    _endpoint_cache_time = now
+    return result
+
+
+async def _resolve_backend_endpoints() -> tuple[str, str]:
+    """Internal resolver — called by get_backend_endpoints() with caching wrapper."""
     # If env var is explicitly set (even to empty/whitespace), validate it
     if BACKEND_API_ENDPOINT is not None:
         # Validate - this will raise for empty/whitespace
@@ -194,7 +215,7 @@ async def get_backend_endpoints() -> tuple[str, str]:
             logger.debug(
                 f"Returning backend URLs - HTTP: {http_url}, WebSocket: {ws_url}"
             )
-            return http_url, ws_url
+            return await _refresh_ephemeral_tunnel_origin(http_url, ws_url)
 
         except Exception as e:
             # Case 4: Invalid URL format
@@ -214,3 +235,38 @@ async def get_backend_endpoints() -> tuple[str, str]:
             "No tunnel URL available. Please set BACKEND_API_ENDPOINT environment "
             "variable or ensure cloudflared service is running."
         )
+
+
+def _is_trycloudflare_url(url: str) -> bool:
+    host = url
+    if "://" in host:
+        host = host.split("://", 1)[1]
+    host = host.split("/", 1)[0]
+    if host.count(":") == 1:
+        host = host.rsplit(":", 1)[0]
+    return host.endswith(".trycloudflare.com")
+
+
+async def _refresh_ephemeral_tunnel_origin(
+    http_url: str, ws_url: str
+) -> tuple[str, str]:
+    """Replace a stale trycloudflare hostname with the live cloudflared URL.
+
+    Quick tunnels mint a new hostname on every restart. If BACKEND_API_ENDPOINT
+    still points at the previous hostname, Vobiz rejects answer_url as invalid.
+    """
+    if not _is_trycloudflare_url(http_url):
+        return http_url, ws_url
+    try:
+        live = await TunnelURLProvider.get_tunnel_urls()
+    except Exception as e:
+        logger.debug(f"Could not refresh trycloudflare origin ({e})")
+        return http_url, ws_url
+    if not live:
+        return http_url, ws_url
+    live_http, live_ws = live
+    if live_http.rstrip("/") != http_url.rstrip("/"):
+        logger.info(
+            f"Refreshing stale trycloudflare origin {http_url} -> {live_http}"
+        )
+    return live_http, live_ws

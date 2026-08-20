@@ -123,14 +123,26 @@ def patch_run_pipeline_externals(
         )
         stack.enter_context(
             patch(
-                "api.services.pipecat.run_pipeline.create_stt_service",
+                "api.services.pipecat.service_factory.create_llm_service",
+                _llm_factory,
+            )
+        )
+        stack.enter_context(
+            patch(
+                "api.services.pipecat.service_factory.create_stt_service",
                 lambda *_args, **_kwargs: PassthroughProcessor(),
             )
         )
         stack.enter_context(
             patch(
-                "api.services.pipecat.run_pipeline.create_tts_service",
+                "api.services.pipecat.service_factory.create_tts_service",
                 _tts_factory,
+            )
+        )
+        stack.enter_context(
+            patch(
+                "api.services.pipecat.service_factory.create_realtime_llm_service",
+                _llm_factory,
             )
         )
         # S3 — the recording fetcher would otherwise resolve org-scoped recordings.

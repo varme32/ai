@@ -9,9 +9,12 @@ import {
 import { BrushCleaning, Maximize2, Minus, Plus, Settings } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { createWorkflowDraftApiV1WorkflowWorkflowIdCreateDraftPost, getWorkflowVersionsApiV1WorkflowWorkflowIdVersionsGet, listDocumentsApiV1KnowledgeBaseDocumentsGet, listRecordingsApiV1WorkflowRecordingsGet, listToolsApiV1ToolsGet } from '@/client';
-import type { DocumentResponseSchema, RecordingResponseSchema, ToolResponse } from '@/client/types.gen';
+import type { ToolResponse } from '@/client/types.gen';
+
+
 import { useNodeSpecs } from "@/components/flow/renderer";
 import { FlowEdge, FlowNode, NodeType } from "@/components/flow/types";
 import { HireExpertNudge } from "@/components/lead-forms/HireExpertNudge";
@@ -92,10 +95,34 @@ function RenderWorkflow({
     const [currentVersionNumber, setCurrentVersionNumber] = useState<number | null>(initialVersionNumber ?? null);
     const [currentVersionStatus, setCurrentVersionStatus] = useState<string | null>(initialVersionStatus ?? null);
     const versionsFetched = useRef(false);
-    const [documents, setDocuments] = useState<DocumentResponseSchema[] | undefined>(undefined);
-    const [tools, setTools] = useState<ToolResponse[] | undefined>(undefined);
-    const [recordings, setRecordings] = useState<RecordingResponseSchema[]>([]);
     const [activeRuntimeNodeId, setActiveRuntimeNodeId] = useState<string | null>(null);
+    const queryClient = useQueryClient();
+
+    // Cached API data — React Query caches these for 60s so navigating away
+    // and back is instant on the second visit. All 3 queries run in parallel.
+    const { data: documentsData } = useQuery({
+        queryKey: ['workflow-documents'],
+        queryFn: () => listDocumentsApiV1KnowledgeBaseDocumentsGet({ query: { limit: 100 } }),
+        select: (res) => res.data?.documents ?? [],
+        staleTime: 60_000,
+    });
+    const documents = documentsData;
+
+    const { data: toolsData } = useQuery({
+        queryKey: ['workflow-tools'],
+        queryFn: () => listToolsApiV1ToolsGet({}),
+        select: (res) => res.data ?? [],
+        staleTime: 60_000,
+    });
+    const tools = toolsData;
+
+    const { data: recordingsData } = useQuery({
+        queryKey: ['workflow-recordings'],
+        queryFn: () => listRecordingsApiV1WorkflowRecordingsGet({ query: {} }),
+        select: (res) => res.data?.recordings ?? [],
+        staleTime: 60_000,
+    });
+    const recordings = recordingsData ?? [];
 
     const {
         rfInstance,
@@ -129,19 +156,19 @@ function RenderWorkflow({
 
     // Single generic component for every node type. Seed with core node types
     // so the initial render is stable before specs load, then merge in any
-    // spec-defined or already-present node types so plugin integrations like
-    // Tuner render without extra React registrations.
+    // spec-defined node types so plugin integrations like Tuner render correctly.
+    // NOTE: deps are intentionally limited to [specs] only — adding `nodes` here
+    // would cause nodeTypes to get a new object reference on every drag/edit,
+    // which makes ReactFlow unmount and remount all nodes (visible lag).
     const nodeTypes = useMemo(() => {
         const typeNames = new Set<string>([
             ...Object.values(NodeType),
             ...specs.map((spec) => spec.name),
-            ...nodes.map((node) => node.type),
-            ...(initialFlow?.nodes ?? []).map((node) => node.type),
         ]);
         return Object.fromEntries(
             Array.from(typeNames).map((typeName) => [typeName, GenericNode]),
         );
-    }, [initialFlow?.nodes, nodes, specs]);
+    }, [specs]);
 
     // Derive hasDraft from the current version status
     const hasDraft = currentVersionStatus === "draft";
@@ -335,42 +362,8 @@ function RenderWorkflow({
         hasAutoOpenedTester.current = true;
     }, [handleOpenTester, openTesterOnLoad, shouldShowWebCallOnboarding, testerDisabledReason]);
 
-    // Fetch documents, tools, and recordings once for the entire workflow
-    useEffect(() => {
-        const fetchData = async () => {
-            try {
-                // Fetch documents
-                const documentsResponse = await listDocumentsApiV1KnowledgeBaseDocumentsGet({
-                    query: { limit: 100 },
-                });
-                if (documentsResponse.data) {
-                    setDocuments(documentsResponse.data.documents);
-                }
-
-                // Fetch tools
-                const toolsResponse = await listToolsApiV1ToolsGet({});
-                if (toolsResponse.data) {
-                    setTools(toolsResponse.data);
-                }
-
-                // Fetch org-level recordings
-                try {
-                    const recordingsResponse = await listRecordingsApiV1WorkflowRecordingsGet({
-                        query: {},
-                    });
-                    if (recordingsResponse.data) {
-                        setRecordings(recordingsResponse.data.recordings);
-                    }
-                } catch {
-                    // Recordings API may not be available yet; silently ignore
-                }
-            } catch (error) {
-                console.error('Failed to fetch documents and tools:', error);
-            }
-        };
-
-        fetchData();
-    }, [workflowId]);
+    // Note: documents, tools, and recordings are now fetched via useQuery above
+    // with a 60-second cache. No manual useEffect needed.
 
     // Memoize defaultEdgeOptions to prevent unnecessary re-renders
     const defaultEdgeOptions = useMemo(() => ({
@@ -454,13 +447,15 @@ function RenderWorkflow({
 
     const updateTool = useCallback(
         (toolUuid: string, updater: (tool: ToolResponse) => ToolResponse) => {
-            setTools((prev) =>
-                prev?.map((tool) =>
-                    tool.tool_uuid === toolUuid ? updater(tool) : tool,
-                ),
+            queryClient.setQueryData(
+                ['workflow-tools'],
+                (prev: ToolResponse[] | undefined) =>
+                    prev?.map((tool) =>
+                        tool.tool_uuid === toolUuid ? updater(tool) : tool,
+                    ),
             );
         },
-        [],
+        [queryClient],
     );
 
     // Memoize the context value to prevent unnecessary re-renders

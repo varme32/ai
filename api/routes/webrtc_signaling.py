@@ -32,7 +32,7 @@ from starlette.websockets import WebSocketState
 from api.constants import ENVIRONMENT, FORCE_TURN_RELAY
 from api.db import db_client
 from api.db.models import UserModel
-from api.enums import Environment
+from api.enums import Environment, WorkflowRunMode
 from api.routes.turn_credentials import (
     TURN_HOST,
     TURN_PORT,
@@ -45,6 +45,7 @@ from api.services.call_concurrency import (
     WorkflowRunSlotAlreadyBoundError,
     call_concurrency,
 )
+from api.services.pipecat.pipeline_prewarm import kickoff_pipeline_prewarm
 from api.services.pipecat.run_pipeline import run_pipeline_smallwebrtc
 from api.services.pipecat.ws_sender_registry import (
     register_ws_sender,
@@ -467,6 +468,15 @@ class SignalingManager:
                 }
             )
             return
+
+        kickoff_pipeline_prewarm(
+            workflow_id=workflow_id,
+            workflow_run_id=workflow_run_id,
+            organization_id=organization_id,
+            user_id=user.id,
+            provider_name=WorkflowRunMode.SMALLWEBRTC.value,
+            call_context_vars=call_context_vars,
+        )
 
         if pc_id in self._peer_connections:
             if self._peer_connection_owners.get(pc_id) != connection_key:

@@ -19,6 +19,7 @@ from api.services.campaign.errors import (
     PhoneNumberPoolExhaustedError,
 )
 from api.services.campaign.rate_limiter import rate_limiter
+from api.services.pipecat.pipeline_prewarm import kickoff_pipeline_prewarm
 from api.services.quota_service import authorize_workflow_run_start
 from api.services.workflow.run_creation import prepare_workflow_run_inputs
 from api.utils.common import get_backend_endpoints
@@ -385,6 +386,14 @@ class CampaignCallDispatcher:
 
             logger.info(
                 f"Call initiated for workflow run {workflow_run.id}, Call ID: {call_result.call_id}"
+            )
+
+            kickoff_pipeline_prewarm(
+                workflow_id=campaign.workflow_id,
+                workflow_run_id=workflow_run.id,
+                organization_id=campaign.organization_id,
+                user_id=campaign.created_by,
+                provider_name=provider.PROVIDER_NAME,
             )
 
         except Exception as e:

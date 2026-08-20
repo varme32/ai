@@ -163,6 +163,10 @@ async def _process_status_update(workflow_run_id: int, status: StatusCallbackReq
             f"[run {workflow_run_id}] Call failed with status: {normalized_status.value}"
         )
 
+        from api.services.pipecat.pipeline_prewarm import discard_pipeline_prewarm
+
+        discard_pipeline_prewarm(workflow_run_id)
+
         await campaign_call_dispatcher.release_call_slot(workflow_run_id)
 
         if workflow_run.campaign_id:

@@ -1,5 +1,7 @@
 """ARQ worker configuration - setup logging before importing tasks"""
 
+import api.network_bootstrap  # noqa: F401
+
 import ssl
 from urllib.parse import urlparse
 

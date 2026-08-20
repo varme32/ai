@@ -1,4 +1,12 @@
-from api.services.pipecat.pre_call_fetch import _extract_initial_context
+import asyncio
+
+import pytest
+
+from api.services.pipecat.pre_call_fetch import (
+    PRE_CALL_FETCH_GREETING_BUDGET_SECONDS,
+    _extract_initial_context,
+    await_pre_call_fetch_for_greeting,
+)
 
 
 class TestExtractInitialContext:
@@ -64,3 +72,67 @@ class TestExtractInitialContext:
     def test_non_dict_vars_yield_empty(self):
         """A non-dict value under a known key yields an empty dict."""
         assert _extract_initial_context({"initial_context": "nope"}) == {}
+
+
+class TestAwaitPreCallFetchForGreeting:
+    @pytest.mark.asyncio
+    async def test_returns_immediately_when_no_task(self):
+        assert await await_pre_call_fetch_for_greeting(
+            None, greeting_needs_context=True
+        ) == {}
+
+    @pytest.mark.asyncio
+    async def test_does_not_wait_when_greeting_has_no_template_vars(self):
+        async def slow():
+            await asyncio.sleep(2)
+            return {"customer_name": "too-late"}
+
+        task = asyncio.create_task(slow())
+        try:
+            started = asyncio.get_running_loop().time()
+            result = await await_pre_call_fetch_for_greeting(
+                task, greeting_needs_context=False
+            )
+            elapsed = asyncio.get_running_loop().time() - started
+            assert result == {}
+            assert elapsed < 0.2
+            assert not task.done()
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    @pytest.mark.asyncio
+    async def test_returns_completed_result_without_waiting(self):
+        async def done():
+            return {"customer_name": "Jane"}
+
+        task = asyncio.create_task(done())
+        await task
+        assert await await_pre_call_fetch_for_greeting(
+            task, greeting_needs_context=True
+        ) == {"customer_name": "Jane"}
+
+    @pytest.mark.asyncio
+    async def test_caps_wait_when_greeting_needs_context(self):
+        async def slow():
+            await asyncio.sleep(2)
+            return {"customer_name": "too-late"}
+
+        task = asyncio.create_task(slow())
+        try:
+            started = asyncio.get_running_loop().time()
+            result = await await_pre_call_fetch_for_greeting(
+                task, greeting_needs_context=True
+            )
+            elapsed = asyncio.get_running_loop().time() - started
+            assert result == {}
+            assert elapsed < PRE_CALL_FETCH_GREETING_BUDGET_SECONDS + 0.3
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass

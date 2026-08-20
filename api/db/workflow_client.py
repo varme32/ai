@@ -313,6 +313,19 @@ class WorkflowClient(BaseDBClient):
         async with self.async_session() as session:
             query = (
                 select(WorkflowDefinitionModel)
+                .options(
+                    # Exclude workflow_json from the list — it can be several hundred KB
+                    # per version. The full JSON is fetched only when a version is
+                    # explicitly loaded (get_workflow_version_by_id / get_draft_version).
+                    load_only(
+                        WorkflowDefinitionModel.id,
+                        WorkflowDefinitionModel.version_number,
+                        WorkflowDefinitionModel.status,
+                        WorkflowDefinitionModel.created_at,
+                        WorkflowDefinitionModel.published_at,
+                        WorkflowDefinitionModel.workflow_id,
+                    )
+                )
                 .where(
                     WorkflowDefinitionModel.workflow_id == workflow_id,
                     WorkflowDefinitionModel.status.in_(

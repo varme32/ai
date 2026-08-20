@@ -30,6 +30,7 @@ from api.services.call_concurrency import (
     WorkflowRunSlotAlreadyBoundError,
     call_concurrency,
 )
+from api.services.pipecat.pipeline_prewarm import kickoff_pipeline_prewarm
 from api.services.quota_service import authorize_workflow_run_start
 from api.services.telephony.call_transfer_manager import get_call_transfer_manager
 from api.services.telephony.factory import (
@@ -281,6 +282,15 @@ async def initiate_call(
         run_id=workflow_run_id,
         gathered_context=gathered_context,
         initial_context=updated_initial_context,
+    )
+
+    kickoff_pipeline_prewarm(
+        workflow_id=workflow.id,
+        workflow_run_id=workflow_run_id,
+        organization_id=user.selected_organization_id,
+        user_id=execution_user_id,
+        provider_name=provider.PROVIDER_NAME,
+        call_context_vars=updated_initial_context,
     )
 
     return {"message": f"Call initiated successfully with run name {workflow_run_name}"}
@@ -687,6 +697,14 @@ async def _handle_telephony_websocket(
             f"WebSocket connected for {provider_type} provider, workflow_run {workflow_run_id}"
         )
 
+        kickoff_pipeline_prewarm(
+            workflow_id=workflow_id,
+            workflow_run_id=workflow_run_id,
+            organization_id=organization_id,
+            user_id=workflow.user_id,
+            provider_name=provider_type or workflow_run.mode,
+        )
+
         provider = await get_telephony_provider_for_run(
             workflow_run, workflow.organization_id
         )
@@ -876,6 +894,14 @@ async def handle_inbound_run(request: Request):
             websocket_url = (
                 f"{wss_backend_endpoint}/api/v1/telephony/ws/"
                 f"{workflow_id}/{config.organization_id}/{workflow_run_id}"
+            )
+
+            kickoff_pipeline_prewarm(
+                workflow_id=workflow_id,
+                workflow_run_id=workflow_run_id,
+                organization_id=config.organization_id,
+                user_id=user_id,
+                provider_name=provider_class.PROVIDER_NAME,
             )
 
             return await provider_instance.start_inbound_stream(

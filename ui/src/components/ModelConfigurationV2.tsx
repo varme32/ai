@@ -13,12 +13,26 @@ import type {
     OrganizationAiModelConfigurationResponse,
     OrganizationAiModelConfigurationV2,
 } from "@/client/types.gen";
-import { AIModelConfigurationV2Editor, type ModelConfigurationDefaultsV2 } from "@/components/AIModelConfigurationV2Editor";
+import dynamic from "next/dynamic";
+
+import { type ModelConfigurationDefaultsV2 } from "@/components/AIModelConfigurationV2Editor";
 import { Skeleton } from "@/components/ui/skeleton";
+
+// Dynamic import — removes ~67KB (AIModelConfigurationV2Editor + ServiceConfigurationForm)
+// from the initial bundle. Loads only when the model config page is visited.
+const AIModelConfigurationV2Editor = dynamic(
+    () => import("@/components/AIModelConfigurationV2Editor").then((m) => ({ default: m.AIModelConfigurationV2Editor })),
+    {
+        ssr: false,
+        loading: () => <div className="space-y-4"><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-3/4" /></div>,
+    }
+);
+
 import { useUserConfig } from "@/context/UserConfigContext";
 import { detailFromError } from "@/lib/apiError";
 import { useAuth } from "@/lib/auth";
 import { fetchModelConfigurationPricing } from "@/lib/modelConfigurationPricing";
+
 
 export default function ModelConfigurationV2({ docsUrl }: { docsUrl?: string }) {
     const auth = useAuth();

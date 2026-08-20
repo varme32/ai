@@ -172,6 +172,31 @@ def stt_uses_external_turns(user_config) -> bool:
 class DograhGoogleLLMService(GoogleLLMService):
     adapter_class = DograhGeminiJSONSchemaAdapter
 
+    def create_client(self):
+        from google import genai
+
+        from api.services.pipecat.google_client_options import google_retry_http_options
+
+        self._client = genai.Client(
+            api_key=self._api_key,
+            http_options=google_retry_http_options(self._http_options),
+        )
+
+    async def push_error(
+        self,
+        error_msg: str,
+        exception: Exception | None = None,
+        fatal: bool = False,
+    ):
+        from api.services.pipecat.google_client_options import (
+            GOOGLE_GATEWAY_USER_MESSAGE,
+            is_google_html_gateway_error,
+        )
+
+        if exception is not None and is_google_html_gateway_error(exception):
+            error_msg = GOOGLE_GATEWAY_USER_MESSAGE
+        await super().push_error(error_msg=error_msg, exception=exception, fatal=fatal)
+
 
 class DograhGoogleVertexLLMService(GoogleVertexLLMService):
     adapter_class = DograhGeminiJSONSchemaAdapter
@@ -206,7 +231,7 @@ def create_stt_service(
         if user_config.stt.model in DEEPGRAM_FLUX_MODELS:
             settings_kwargs = {
                 "model": user_config.stt.model,
-                "eot_timeout_ms": 3000,
+                "eot_timeout_ms": 1200,
                 "eot_threshold": 0.7,
                 "eager_eot_threshold": 0.5,
                 "keyterm": keyterms or [],
@@ -232,7 +257,7 @@ def create_stt_service(
             settings=DeepgramSTTSettings(
                 language=language,
                 profanity_filter=False,
-                endpointing=100,
+                endpointing=50,
                 model=user_config.stt.model,
                 keyterm=keyterms or [],
             ),
@@ -1091,8 +1116,11 @@ def create_realtime_llm_service(user_config, audio_config: "AudioConfig"):
         }
         if language:
             settings_kwargs["language"] = language
+        from api.services.pipecat.google_client_options import google_retry_http_options
+
         return DograhGeminiLiveLLMService(
             api_key=api_key,
+            http_options=google_retry_http_options(),
             settings=DograhGeminiLiveLLMService.Settings(**settings_kwargs),
         )
     elif provider == ServiceProviders.GOOGLE_VERTEX_REALTIME.value:

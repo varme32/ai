@@ -7,16 +7,17 @@ from api.enums import PostHogEvent, WorkflowRunState
 from api.services.campaign.circuit_breaker import circuit_breaker
 from api.services.integrations import IntegrationRuntimeSession
 from api.services.pipecat.audio_config import AudioConfig
-from api.services.pipecat.audio_playback import play_audio_loop
 from api.services.pipecat.in_memory_buffers import (
     InMemoryLogsBuffer,
     InMemoryRecordingBuffers,
 )
 from api.services.pipecat.pipeline_metrics_aggregator import PipelineMetricsAggregator
+from api.services.pipecat.pre_call_fetch import await_pre_call_fetch_for_greeting
 from api.services.pipecat.tracing_config import get_trace_url
 from api.services.pipecat.transcript_log_coordinator import TranscriptLogCoordinator
 from api.services.posthog_client import capture_event
 from api.services.workflow.pipecat_engine import PipecatEngine
+from api.services.workflow.workflow_graph import extract_template_variables
 from api.services.workflow_run_artifacts import upload_workflow_run_artifacts
 from api.tasks.arq import enqueue_job
 from api.tasks.function_names import FunctionNames
@@ -26,6 +27,30 @@ from pipecat.frames.frames import (
 from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 from pipecat.utils.enums import EndTaskReason
+
+
+def _start_opening_needs_fetch_context(engine: PipecatEngine) -> bool:
+    """True when the start greeting/prompt still has unresolved template vars."""
+    start_node = engine.workflow.nodes.get(engine.workflow.start_node_id)
+    if not start_node:
+        return False
+
+    texts: list[str] = []
+    if start_node.greeting:
+        texts.append(start_node.greeting)
+    elif start_node.prompt:
+        texts.append(start_node.prompt)
+    if not texts:
+        return False
+
+    needed: set[str] = set()
+    for text in texts:
+        needed |= extract_template_variables(text)
+    if not needed:
+        return False
+
+    context = engine._call_context_vars or {}
+    return any(var not in context or context.get(var) in (None, "") for var in needed)
 
 
 async def _capture_call_event(
@@ -100,11 +125,38 @@ def register_event_handlers(
         "initial_response_triggered": False,
     }
 
+    async def _apply_pre_call_fetch(fetch_result: dict) -> None:
+        if not fetch_result:
+            return
+        engine._call_context_vars.update(fetch_result)
+        try:
+            await db_client.update_workflow_run(
+                workflow_run_id,
+                initial_context={**engine._call_context_vars},
+            )
+        except Exception as e:
+            logger.error(f"Failed to persist pre-call fetch context: {e}")
+        logger.info(
+            f"Pre-call fetch complete, merged keys: {list(fetch_result.keys())}"
+        )
+
+    async def _apply_pre_call_fetch_when_ready() -> None:
+        if pre_call_fetch_task is None:
+            return
+        try:
+            fetch_result = await pre_call_fetch_task
+        except Exception:
+            logger.exception("Background pre-call fetch failed")
+            return
+        if fetch_result:
+            await _apply_pre_call_fetch(fetch_result)
+
     async def maybe_trigger_initial_response():
         """Start the conversation after both pipeline_started and client_connected events.
 
-        If a pre-call fetch is in progress, plays a ringer while waiting for the
-        response, then merges the result into the call context before proceeding.
+        Pre-call fetch is not allowed to hold the greeting. If the start
+        greeting references fetch variables, wait a short budget; otherwise
+        speak immediately and merge CRM data into later turns.
         """
         if (
             ready_state["pipeline_started"]
@@ -119,45 +171,17 @@ def register_event_handlers(
                 )
             )
 
-            # Wait for pre-call fetch if in progress, playing ringer meanwhile
-            if pre_call_fetch_task is not None:
-                if not pre_call_fetch_task.done():
-                    logger.info(
-                        "Pre-call fetch still in progress, playing ringer while waiting"
-                    )
-                    stop_ringer = asyncio.Event()
-                    sample_rate = audio_config.pipeline_sample_rate or 16000
-                    ringer_task = asyncio.create_task(
-                        play_audio_loop(
-                            stop_event=stop_ringer,
-                            sample_rate=sample_rate,
-                            queue_frame=transport.output().queue_frame,
-                        )
-                    )
-                    try:
-                        fetch_result = await pre_call_fetch_task
-                    finally:
-                        stop_ringer.set()
-                        await ringer_task
-                else:
-                    fetch_result = pre_call_fetch_task.result()
+            fetch_result = await await_pre_call_fetch_for_greeting(
+                pre_call_fetch_task,
+                greeting_needs_context=_start_opening_needs_fetch_context(engine),
+            )
+            if fetch_result:
+                await _apply_pre_call_fetch(fetch_result)
+            elif (
+                pre_call_fetch_task is not None and not pre_call_fetch_task.done()
+            ):
+                asyncio.create_task(_apply_pre_call_fetch_when_ready())
 
-                if fetch_result:
-                    engine._call_context_vars.update(fetch_result)
-                    try:
-                        await db_client.update_workflow_run(
-                            workflow_run_id,
-                            initial_context={**engine._call_context_vars},
-                        )
-                    except Exception as e:
-                        logger.error(f"Failed to persist pre-call fetch context: {e}")
-                    logger.info(
-                        f"Pre-call fetch complete, merged keys: "
-                        f"{list(fetch_result.keys())}"
-                    )
-
-            # Set the start node now (after pre-call fetch data is merged)
-            # so that render_template() has the complete _call_context_vars.
             await engine.set_node(engine.workflow.start_node_id)
             await engine.queue_node_opening(
                 node_id=engine.workflow.start_node_id,

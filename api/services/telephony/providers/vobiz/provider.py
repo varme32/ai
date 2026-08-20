@@ -24,6 +24,33 @@ from api.services.telephony.base import (
 from api.utils.common import get_backend_endpoints
 from api.utils.telephony_address import normalize_telephony_address
 
+from .urls import build_vobiz_answer_url, build_vobiz_hangup_url
+
+_VOBIZ_CALL_BODY_FIELDS = frozenset(
+    {
+        "from",
+        "to",
+        "answer_url",
+        "answer_method",
+        "ring_url",
+        "ring_method",
+        "hangup_url",
+        "hangup_method",
+        "fallback_url",
+        "fallback_method",
+        "machine_detection",
+        "machine_detection_time",
+        "machine_detection_url",
+        "machine_detection_method",
+        "caller_name",
+        "send_digits",
+        "send_on_preanswer",
+        "time_limit",
+        "hangup_on_ring",
+        "ring_timeout",
+    }
+)
+
 if TYPE_CHECKING:
     from fastapi import WebSocket
 
@@ -36,6 +63,24 @@ class VobizProvider(TelephonyProvider):
 
     PROVIDER_NAME = WorkflowRunMode.VOBIZ.value
     WEBHOOK_ENDPOINT = "vobiz-xml"
+
+    # Shared persistent HTTP session — reuses TCP+TLS connection across calls
+    _shared_session: aiohttp.ClientSession | None = None
+
+    @classmethod
+    async def get_session(cls) -> aiohttp.ClientSession:
+        """Return the shared aiohttp session, creating it on first use."""
+        if cls._shared_session is None or cls._shared_session.closed:
+            connector = aiohttp.TCPConnector(
+                limit=10,
+                keepalive_timeout=60,
+                enable_cleanup_closed=True,
+            )
+            cls._shared_session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=30, connect=5),
+                connector=connector,
+            )
+        return cls._shared_session
 
     def __init__(self, config: Dict[str, Any]):
         """
@@ -91,30 +136,52 @@ class VobizProvider(TelephonyProvider):
         to_number_clean = to_number.lstrip("+")
         from_number_clean = from_number.lstrip("+")
 
-        # Prepare call data (JSON format)
+        workflow_id = kwargs.pop("workflow_id", None)
+        organization_id = kwargs.pop("organization_id", None)
+        backend_endpoint, _ = await get_backend_endpoints()
+        try:
+            if workflow_id is None or organization_id is None:
+                from urllib.parse import parse_qs, urlparse
+
+                parsed = urlparse(webhook_url)
+                query = parse_qs(parsed.query)
+                if workflow_id is None and query.get("workflow_id"):
+                    workflow_id = int(query["workflow_id"][0])
+                if organization_id is None and query.get("organization_id"):
+                    organization_id = int(query["organization_id"][0])
+            if not workflow_id or not organization_id or not workflow_run_id:
+                raise ValueError(
+                    "Vobiz answer_url is missing workflow_id, organization_id, "
+                    "or workflow_run_id"
+                )
+            answer_url = build_vobiz_answer_url(
+                backend_endpoint,
+                workflow_id=int(workflow_id),
+                organization_id=int(organization_id),
+                workflow_run_id=int(workflow_run_id),
+            )
+            hangup_url = build_vobiz_hangup_url(
+                backend_endpoint, workflow_run_id=int(workflow_run_id)
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        logger.info(f"Vobiz answer_url={answer_url}")
+
         data = {
             "from": from_number_clean,
             "to": to_number_clean,
-            "answer_url": webhook_url,
+            "answer_url": answer_url,
             "answer_method": "POST",
+            "hangup_url": hangup_url,
+            "hangup_method": "POST",
         }
 
-        # Add hangup callback if workflow_run_id provided
-        if workflow_run_id:
-            backend_endpoint, _ = await get_backend_endpoints()
-            hangup_url = f"{backend_endpoint}/api/v1/telephony/vobiz/hangup-callback/{workflow_run_id}"
-            ring_url = f"{backend_endpoint}/api/v1/telephony/vobiz/ring-callback/{workflow_run_id}"
-            data.update(
-                {
-                    "hangup_url": hangup_url,
-                    "hangup_method": "POST",
-                    "ring_url": ring_url,
-                    "ring_method": "POST",
-                }
-            )
-
-        # Add optional parameters
-        data.update(kwargs)
+        # Only forward documented Vobiz Call fields. workflow_id / organization_id
+        # are Dograh routing ids and must not land in the Vobiz JSON body.
+        data.update(
+            {key: value for key, value in kwargs.items() if key in _VOBIZ_CALL_BODY_FIELDS}
+        )
 
         # Make the API request
         headers = {
@@ -123,8 +190,8 @@ class VobizProvider(TelephonyProvider):
             "Content-Type": "application/json",
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(endpoint, json=data, headers=headers) as response:
+        session = await self.get_session()
+        async with session.post(endpoint, json=data, headers=headers) as response:
                 if response.status != 201:
                     error_data = await response.text()
                     logger.error(f"Vobiz API error: {error_data}")
@@ -179,8 +246,8 @@ class VobizProvider(TelephonyProvider):
 
         headers = {"X-Auth-ID": self.auth_id, "X-Auth-Token": self.auth_token}
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(endpoint, headers=headers) as response:
+        session = await self.get_session()
+        async with session.get(endpoint, headers=headers) as response:
                 if response.status != 200:
                     error_data = await response.text()
                     logger.error(f"Failed to get Vobiz call status: {error_data}")

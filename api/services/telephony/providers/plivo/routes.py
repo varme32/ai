@@ -12,6 +12,7 @@ from pipecat.utils.run_context import set_current_run_id
 from starlette.responses import HTMLResponse
 
 from api.db import db_client
+from api.services.pipecat.pipeline_prewarm import kickoff_pipeline_prewarm
 from api.services.telephony.factory import get_telephony_provider_for_run
 from api.services.telephony.status_processor import (
     StatusCallbackRequest,
@@ -106,6 +107,14 @@ async def handle_plivo_xml_webhook(
         gathered_context["call_id"] = call_id
         await db_client.update_workflow_run(
             run_id=workflow_run_id, gathered_context=gathered_context
+        )
+
+    if workflow_run:
+        kickoff_pipeline_prewarm(
+            workflow_id=workflow_id,
+            workflow_run_id=workflow_run_id,
+            organization_id=organization_id,
+            provider_name=provider.PROVIDER_NAME,
         )
 
     response_content = await provider.get_webhook_response(

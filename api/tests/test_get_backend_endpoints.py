@@ -197,6 +197,26 @@ class TestGetBackendEndpointsWithEnvVar:
                 assert ws_url == "ws://localhost:8000"
 
     @pytest.mark.asyncio
+    @pytest.mark.asyncio
+    async def test_stale_trycloudflare_env_is_refreshed_from_live_tunnel(self):
+        """Pinned trycloudflare hostnames go stale on every cloudflared restart."""
+        with patch(
+            "api.utils.common.BACKEND_API_ENDPOINT",
+            "https://old-name.trycloudflare.com",
+        ):
+            with patch(
+                "api.utils.common.TunnelURLProvider.get_tunnel_urls",
+                new_callable=AsyncMock,
+            ) as mock_tunnel:
+                mock_tunnel.return_value = (
+                    "https://fresh-name.trycloudflare.com",
+                    "wss://fresh-name.trycloudflare.com",
+                )
+                http_url, ws_url = await get_backend_endpoints()
+                assert http_url == "https://fresh-name.trycloudflare.com"
+                assert ws_url == "wss://fresh-name.trycloudflare.com"
+
+    @pytest.mark.asyncio
     async def test_localhost_with_trailing_slash_tunnel_exception_falls_back(self):
         """Test that tunnel exceptions fall back to localhost endpoint, trailing slash stripped."""
         with patch("api.utils.common.BACKEND_API_ENDPOINT", "http://localhost:8000/"):

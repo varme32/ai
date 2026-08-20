@@ -18,6 +18,7 @@ from api.services.call_concurrency import (
     CallConcurrencyLimitError,
     call_concurrency,
 )
+from api.services.pipecat.pipeline_prewarm import kickoff_pipeline_prewarm
 from api.services.quota_service import authorize_workflow_run_start
 from api.services.telephony.factory import (
     get_default_telephony_provider,
@@ -359,6 +360,14 @@ async def _execute_resolved_target(
     logger.info(
         f"Call initiated successfully for workflow run {workflow_run.id} "
         f"via {target.identifier_type}={target.identifier_value}"
+    )
+
+    kickoff_pipeline_prewarm(
+        workflow_id=target.workflow.id,
+        workflow_run_id=workflow_run.id,
+        organization_id=target.organization_id,
+        user_id=target.workflow.user_id,
+        provider_name=provider.PROVIDER_NAME,
     )
 
     return TriggerCallResponse(

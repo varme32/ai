@@ -25,7 +25,7 @@ $EnvFile    = if ($env:DOGRAH_ENV_FILE) { $env:DOGRAH_ENV_FILE } else { Join-Pat
 $RunDir     = Join-Path $BaseDir 'run'
 $LogsRoot   = Join-Path $BaseDir 'logs'
 $LatestDir  = Join-Path $LogsRoot 'latest'
-$VenvPath   = Join-Path $BaseDir 'venv'
+$VenvPath   = if (Test-Path (Join-Path $BaseDir 'api/.venv')) { Join-Path $BaseDir 'api/.venv' } else { Join-Path $BaseDir 'venv' }
 
 Write-Host "Starting Dograh Services (DEV MODE) in BASE_DIR: $BaseDir"
 Write-Host "Auto-reload enabled for api/ directory changes"
@@ -143,7 +143,7 @@ Write-Host "Waiting for uvicorn health check at $healthUrl ..."
 $healthy = $false
 for ($attempt = 1; $attempt -le $HealthMaxAttempts; $attempt++) {
     try {
-        $resp = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+        $resp = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
         if ($resp.StatusCode -eq 200) {
             Write-Host "OK uvicorn healthy (attempt $attempt)"
             $healthy = $true

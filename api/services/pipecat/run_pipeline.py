@@ -1,3 +1,5 @@
+import api.network_bootstrap  # noqa: F401
+
 import asyncio
 from typing import Optional
 
@@ -7,8 +9,6 @@ from loguru import logger
 from api.db import db_client
 from api.enums import WorkflowRunMode
 from api.schemas.workflow_configurations import (
-    DEFAULT_MAX_CALL_DURATION_SECONDS,
-    DEFAULT_MAX_USER_IDLE_TIMEOUT_SECONDS,
     DEFAULT_PROVISIONAL_VAD_PAUSE_SECS,
     DEFAULT_SMART_TURN_STOP_SECS,
     DEFAULT_TURN_START_MIN_WORDS,
@@ -27,6 +27,7 @@ from api.services.pipecat.active_calls import (
     unregister_active_call as unregister_worker_active_call,
 )
 from api.services.pipecat.audio_config import AudioConfig, create_audio_config
+from api.services.pipecat.audio_model_warmup import create_silero_vad_analyzer_async
 from api.services.pipecat.event_handlers import (
     register_audio_data_handler,
     register_event_handlers,
@@ -42,7 +43,12 @@ from api.services.pipecat.pipeline_engine_callbacks_processor import (
     PipelineEngineCallbacksProcessor,
 )
 from api.services.pipecat.pipeline_metrics_aggregator import PipelineMetricsAggregator
-from api.services.pipecat.pre_call_fetch import execute_pre_call_fetch
+from api.services.pipecat.pipeline_prewarm import (
+    PipelineResources,
+    peek_ready_prewarm,
+    prepare_pipeline_resources,
+    take_pipeline_prewarm,
+)
 from api.services.pipecat.realtime_feedback_events import (
     build_node_transition_event,
 )
@@ -58,9 +64,6 @@ from api.services.pipecat.recording_router_processor import RecordingRouterProce
 from api.services.pipecat.service_factory import (
     create_llm_service,
     create_llm_service_from_provider,
-    create_realtime_llm_service,
-    create_stt_service,
-    create_tts_service,
     stt_uses_external_turns,
 )
 from api.services.pipecat.tracing_config import (
@@ -71,9 +74,7 @@ from api.services.pipecat.transport_setup import create_webrtc_transport
 from api.services.pipecat.worker_runner import run_pipeline_worker
 from api.services.pipecat.ws_sender_registry import get_ws_sender
 from api.services.telephony import registry as telephony_registry
-from api.services.workflow.dto import ReactFlowDTO
 from api.services.workflow.pipecat_engine import PipecatEngine
-from api.services.workflow.workflow_graph import WorkflowGraph
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -314,11 +315,11 @@ async def _run_pipeline_telephony_impl(
     logger.debug(f"Running {provider_name} pipeline for workflow_run {workflow_run_id}")
     set_current_run_id(workflow_run_id)
 
-    workflow = await db_client.get_workflow(
-        workflow_id, organization_id=organization_id
+    workflow, workflow_run, user_config, is_realtime = await _load_setup_for_transport(
+        workflow_id=workflow_id,
+        workflow_run_id=workflow_run_id,
+        organization_id=organization_id,
     )
-    if not workflow:
-        raise HTTPException(status_code=404, detail="Workflow not found")
     set_current_org_id(workflow.organization_id)
 
     ambient_noise_config = None
@@ -331,33 +332,11 @@ async def _run_pipeline_telephony_impl(
     # (test call, campaign dispatch, inbound). Transports use it to load creds
     # from the right config row. Falls back to None for legacy runs (transports
     # then resolve the org's default config).
-    workflow_run = await db_client.get_workflow_run(
-        workflow_run_id, organization_id=organization_id
-    )
-    if not workflow_run:
-        raise HTTPException(status_code=404, detail="Workflow run not found")
-    if workflow_run.workflow_id != workflow_id:
-        raise HTTPException(status_code=400, detail="workflow_run_workflow_mismatch")
-
     telephony_configuration_id = None
     if workflow_run.initial_context:
         telephony_configuration_id = workflow_run.initial_context.get(
             "telephony_configuration_id"
         )
-
-    # Resolve effective org config here so the transport can tune its
-    # bot-stopped-speaking fallback based on is_realtime; pass the resolved
-    # values into _run_pipeline so it doesn't fetch them again.
-    from api.services.configuration.ai_model_configuration import (
-        get_effective_ai_model_configuration_for_workflow,
-    )
-
-    run_configs = workflow_run.definition.workflow_configurations or {}
-    user_config = await get_effective_ai_model_configuration_for_workflow(
-        organization_id=workflow.organization_id,
-        workflow_configurations=run_configs,
-    )
-    is_realtime = bool(user_config.is_realtime and user_config.realtime is not None)
 
     spec = telephony_registry.get(provider_name)
     audio_config = create_audio_config(provider_name)
@@ -438,53 +417,32 @@ async def _run_pipeline_smallwebrtc_impl(
     )
     set_current_run_id(workflow_run_id)
 
-    workflow_scope = (
-        {"organization_id": organization_id}
-        if organization_id is not None
-        else {"user_id": user_id}
+    # Prefer offer-time prewarm so we do not repeat config resolution
+    # on the hot path after media is already up.
+    org_id = organization_id
+    if org_id is None:
+        workflow = await db_client.get_workflow(workflow_id, user_id=user_id)
+        if workflow:
+            org_id = workflow.organization_id
+
+    if org_id is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    workflow, workflow_run, user_config, is_realtime = await _load_setup_for_transport(
+        workflow_id=workflow_id,
+        workflow_run_id=workflow_run_id,
+        organization_id=org_id,
     )
-
-    # Get workflow to extract all pipeline configurations.
-    workflow = await db_client.get_workflow(workflow_id, **workflow_scope)
-
-    # Set org context early so tasks created by the transport inherit it
-    if workflow:
-        set_current_org_id(workflow.organization_id)
+    set_current_org_id(workflow.organization_id)
 
     ambient_noise_config = None
-    if workflow and workflow.workflow_configurations:
+    if workflow.workflow_configurations:
         if "ambient_noise_configuration" in workflow.workflow_configurations:
             ambient_noise_config = workflow.workflow_configurations[
                 "ambient_noise_configuration"
             ]
 
-    # Create audio configuration for WebRTC
     audio_config = create_audio_config(WorkflowRunMode.SMALLWEBRTC.value)
-
-    # Resolve workflow_run + effective org config here so the transport can
-    # tune its bot-stopped-speaking fallback based on is_realtime. _run_pipeline
-    # reuses these via kwargs so we don't fetch twice.
-    from api.services.configuration.ai_model_configuration import (
-        get_effective_ai_model_configuration_for_workflow,
-    )
-
-    workflow_run = await db_client.get_workflow_run(workflow_run_id, **workflow_scope)
-    if not workflow_run:
-        raise HTTPException(status_code=404, detail="Workflow run not found")
-    if workflow_run.workflow_id != workflow_id:
-        raise HTTPException(
-            status_code=400,
-            detail="workflow_run_workflow_mismatch",
-        )
-
-    run_configs = (
-        (workflow_run.definition.workflow_configurations or {}) if workflow_run else {}
-    )
-    user_config = await get_effective_ai_model_configuration_for_workflow(
-        organization_id=workflow.organization_id if workflow else None,
-        workflow_configurations=run_configs,
-    )
-    is_realtime = bool(user_config.is_realtime and user_config.realtime is not None)
 
     transport = await create_webrtc_transport(
         webrtc_connection,
@@ -503,8 +461,60 @@ async def _run_pipeline_smallwebrtc_impl(
         user_provider_id=user_provider_id,
         workflow_run=workflow_run,
         resolved_user_config=user_config,
-        organization_id=organization_id,
+        organization_id=org_id,
     )
+
+
+async def _load_setup_for_transport(
+    *,
+    workflow_id: int,
+    workflow_run_id: int,
+    organization_id: int,
+):
+    """Load workflow/run/config for transport setup, reusing prewarm when ready."""
+    peeked = peek_ready_prewarm(workflow_run_id)
+    if peeked is not None:
+        workflow = peeked.workflow
+        workflow_run = peeked.workflow_run
+        if workflow is None or workflow_run is None:
+            peeked = None
+        elif workflow_run.workflow_id != workflow_id:
+            raise HTTPException(
+                status_code=400, detail="workflow_run_workflow_mismatch"
+            )
+        else:
+            logger.debug(
+                f"Using prewarmed config for transport setup of run {workflow_run_id}"
+            )
+            return (
+                workflow,
+                workflow_run,
+                peeked.user_config,
+                peeked.is_realtime,
+            )
+
+    workflow, workflow_run = await asyncio.gather(
+        db_client.get_workflow(workflow_id, organization_id=organization_id),
+        db_client.get_workflow_run(workflow_run_id, organization_id=organization_id),
+    )
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    if not workflow_run:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+    if workflow_run.workflow_id != workflow_id:
+        raise HTTPException(status_code=400, detail="workflow_run_workflow_mismatch")
+
+    from api.services.configuration.ai_model_configuration import (
+        get_effective_ai_model_configuration_for_workflow,
+    )
+
+    run_configs = workflow_run.definition.workflow_configurations or {}
+    user_config = await get_effective_ai_model_configuration_for_workflow(
+        organization_id=workflow.organization_id,
+        workflow_configurations=run_configs,
+    )
+    is_realtime = bool(user_config.is_realtime and user_config.realtime is not None)
+    return workflow, workflow_run, user_config, is_realtime
 
 
 async def _run_pipeline(
@@ -541,6 +551,76 @@ async def _run_pipeline(
             unregister_worker_active_call(workflow_run_id)
 
 
+async def _resolve_pipeline_resources(
+    *,
+    workflow_id: int,
+    workflow_run_id: int,
+    user_id: int,
+    organization_id: int | None,
+    call_context_vars: dict,
+    audio_config: AudioConfig | None,
+    workflow_run=None,
+    resolved_user_config=None,
+) -> PipelineResources:
+    """Reuse ring-time prewarm when available; otherwise build resources now."""
+    org_id = organization_id
+    if org_id is None:
+        workflow_scope = {"user_id": user_id}
+        workflow = await db_client.get_workflow(workflow_id, **workflow_scope)
+        if not workflow:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        org_id = workflow.organization_id
+
+    prewarmed = await take_pipeline_prewarm(workflow_run_id)
+    if prewarmed is not None:
+        if prewarmed.workflow_run.is_completed:
+            raise HTTPException(
+                status_code=400, detail="Workflow run already completed"
+            )
+        if (
+            audio_config is not None
+            and prewarmed.audio_config is not None
+            and audio_config.pipeline_sample_rate
+            != prewarmed.audio_config.pipeline_sample_rate
+        ):
+            logger.info(
+                f"Prewarmed audio config mismatch for run {workflow_run_id}; rebuilding"
+            )
+            prewarmed = None
+        else:
+            if call_context_vars:
+                prewarmed.merged_call_context_vars.update(call_context_vars)
+            logger.info(
+                f"Using prewarmed pipeline resources for run {workflow_run_id}"
+            )
+            return prewarmed
+
+    if workflow_run is None:
+        workflow_run = await db_client.get_workflow_run(
+            workflow_run_id, organization_id=org_id
+        )
+    provider_name = (
+        workflow_run.mode if workflow_run else WorkflowRunMode.SMALLWEBRTC.value
+    )
+
+    try:
+        return await prepare_pipeline_resources(
+            workflow_id=workflow_id,
+            workflow_run_id=workflow_run_id,
+            organization_id=org_id,
+            user_id=user_id,
+            provider_name=provider_name,
+            call_context_vars=call_context_vars,
+            workflow_run=workflow_run,
+            resolved_user_config=resolved_user_config,
+            audio_config=audio_config,
+        )
+    except ValueError as e:
+        detail = str(e)
+        status = 404 if "not found" in detail.lower() else 400
+        raise HTTPException(status_code=status, detail=detail) from e
+
+
 async def _run_pipeline_impl(
     transport,
     workflow_id: int,
@@ -565,180 +645,36 @@ async def _run_pipeline_impl(
         resolved_user_config: Organization model configuration with workflow
             model_overrides already applied. Fetched and resolved here if None.
     """
-    workflow_scope = (
-        {"organization_id": organization_id}
-        if organization_id is not None
-        else {"user_id": user_id}
-    )
-
-    if workflow_run is None:
-        workflow_run = await db_client.get_workflow_run(
-            workflow_run_id, **workflow_scope
-        )
-    if not workflow_run:
-        raise HTTPException(status_code=404, detail="Workflow run not found")
-    if workflow_run.workflow_id != workflow_id:
-        raise HTTPException(
-            status_code=400,
-            detail="workflow_run_workflow_mismatch",
-        )
-
-    # If the workflow run is already completed, we don't need to run it again
-    if workflow_run.is_completed:
-        raise HTTPException(status_code=400, detail="Workflow run already completed")
-
-    merged_call_context_vars = dict(workflow_run.initial_context or {})
-    # If there is some extra call_context_vars, fold them in. Persistence
-    # happens once below, after runtime_configuration is also resolved.
-    if call_context_vars:
-        merged_call_context_vars = {**merged_call_context_vars, **call_context_vars}
-
-    # Get workflow for metadata (name, organization_id, call_disposition_codes)
-    workflow = await db_client.get_workflow(workflow_id, **workflow_scope)
-    if not workflow:
-        raise HTTPException(status_code=404, detail="Workflow not found")
-
-    # Use the run's pinned definition for graph + configs (not the workflow's current)
-    run_definition = workflow_run.definition
-    run_workflow_json = run_definition.workflow_json
-    run_configs = run_definition.workflow_configurations or {}
-
-    # Extract configurations from the version's workflow_configurations
-    max_call_duration_seconds = DEFAULT_MAX_CALL_DURATION_SECONDS
-    max_user_idle_timeout = DEFAULT_MAX_USER_IDLE_TIMEOUT_SECONDS
-    keyterms = None  # Dictionary words for STT boosting
-    transcript_config = run_configs.get("transcript_configuration") or {}
-    include_transcript_end_timestamps = bool(
-        transcript_config.get("include_end_timestamps", False)
-    )
-
-    if run_configs:
-        if "max_call_duration" in run_configs:
-            max_call_duration_seconds = run_configs["max_call_duration"]
-
-        if "max_user_idle_timeout" in run_configs:
-            max_user_idle_timeout = run_configs["max_user_idle_timeout"]
-
-        if "dictionary" in run_configs:
-            dictionary = run_configs["dictionary"]
-            if dictionary and isinstance(dictionary, str):
-                keyterms = [
-                    term.strip() for term in dictionary.split(",") if term.strip()
-                ]
-
-    # Resolve model overrides from the version onto global org config (skip
-    # when the caller already resolved it).
-    if resolved_user_config is None:
-        from api.services.configuration.ai_model_configuration import (
-            get_effective_ai_model_configuration_for_workflow,
-        )
-
-        user_config = await get_effective_ai_model_configuration_for_workflow(
-            organization_id=workflow.organization_id,
-            workflow_configurations=run_configs,
-        )
-    else:
-        user_config = resolved_user_config
-
-    from api.services.managed_model_services import (
-        MPS_CORRELATION_ID_CONTEXT_KEY,
-        ensure_mps_correlation_id,
-    )
-
-    mps_correlation_id = await ensure_mps_correlation_id(
-        ai_model_config=user_config,
+    resources = await _resolve_pipeline_resources(
+        workflow_id=workflow_id,
         workflow_run_id=workflow_run_id,
-        initial_context=merged_call_context_vars,
+        user_id=user_id,
+        organization_id=organization_id,
+        call_context_vars=call_context_vars,
+        audio_config=audio_config,
+        workflow_run=workflow_run,
+        resolved_user_config=resolved_user_config,
     )
-    if mps_correlation_id:
-        merged_call_context_vars[MPS_CORRELATION_ID_CONTEXT_KEY] = mps_correlation_id
+    workflow = resources.workflow
+    workflow_run = resources.workflow_run
+    user_config = resources.user_config
+    workflow_graph = resources.workflow_graph
+    stt = resources.stt
+    tts = resources.tts
+    llm = resources.llm
+    inference_llm = resources.inference_llm
+    is_realtime = resources.is_realtime
+    merged_call_context_vars = resources.merged_call_context_vars
+    pre_call_fetch_task = resources.pre_call_fetch_task
+    has_recordings = resources.has_recordings
+    max_call_duration_seconds = resources.max_call_duration_seconds
+    max_user_idle_timeout = resources.max_user_idle_timeout
+    include_transcript_end_timestamps = resources.include_transcript_end_timestamps
+    if audio_config is None:
+        audio_config = resources.audio_config
 
-    # Detect realtime mode (speech-to-speech services like OpenAI Realtime, Gemini Live)
-    is_realtime = user_config.is_realtime and user_config.realtime is not None
-
-    # Create services based on user configuration
-    if is_realtime:
-        llm = create_realtime_llm_service(user_config, audio_config)
-        stt = None
-        tts = None
-        # Realtime services don't implement run_inference, so create a
-        # separate text LLM for variable extraction and other out-of-band
-        # inference calls.
-        inference_llm = create_llm_service(
-            user_config,
-            correlation_id=mps_correlation_id,
-        )
-    else:
-        stt = create_stt_service(
-            user_config,
-            audio_config,
-            keyterms=keyterms,
-            correlation_id=mps_correlation_id,
-        )
-        tts = create_tts_service(
-            user_config,
-            audio_config,
-            correlation_id=mps_correlation_id,
-        )
-        llm = create_llm_service(user_config, correlation_id=mps_correlation_id)
-        inference_llm = None
-
-    # Stamp the providers/models actually resolved for this run onto
-    # initial_context so they're available for post-call analytics
-    # (model_overrides may have shifted them away from the org-level
-    # user_config).
-    if is_realtime:
-        # llm_* refers to the side-channel text LLM (variable extraction,
-        # voicemail detection); realtime_* is the speech-to-speech service.
-        runtime_configuration = {
-            "realtime_provider": user_config.realtime.provider,
-            "realtime_model": user_config.realtime.model,
-            "llm_provider": user_config.llm.provider,
-            "llm_model": user_config.llm.model,
-        }
-    else:
-        runtime_configuration = {
-            "stt_provider": user_config.stt.provider,
-            "stt_model": user_config.stt.model,
-            "tts_provider": user_config.tts.provider,
-            "tts_model": user_config.tts.model,
-            "llm_provider": user_config.llm.provider,
-            "llm_model": user_config.llm.model,
-        }
-    merged_call_context_vars = {
-        **merged_call_context_vars,
-        "runtime_configuration": runtime_configuration,
-    }
-    await db_client.update_workflow_run(
-        workflow_run_id, initial_context=merged_call_context_vars
-    )
-
-    workflow_graph = WorkflowGraph(
-        ReactFlowDTO.model_validate(run_workflow_json),
-        skip_instance_constraints_for={"trigger"},
-    )
-
-    # Pre-call fetch: fire early so it runs concurrently with remaining setup
-    pre_call_fetch_task = None
-    start_node = workflow_graph.nodes.get(workflow_graph.start_node_id)
-    if (
-        start_node
-        and start_node.pre_call_fetch_enabled
-        and start_node.pre_call_fetch_url
-    ):
-        logger.info(
-            f"Pre-call fetch enabled for workflow run {workflow_run_id}, "
-            f"firing request to {start_node.pre_call_fetch_url}"
-        )
-        pre_call_fetch_task = asyncio.create_task(
-            execute_pre_call_fetch(
-                url=start_node.pre_call_fetch_url,
-                credential_uuid=start_node.pre_call_fetch_credential_uuid,
-                call_context_vars=merged_call_context_vars,
-                workflow_id=workflow_id,
-                organization_id=workflow.organization_id,
-            )
-        )
+    run_definition = workflow_run.definition
+    run_configs = run_definition.workflow_configurations or {}
 
     # Create in-memory logs buffer early so it can be used by engine callbacks
     in_memory_logs_buffer = InMemoryLogsBuffer(workflow_run_id)
@@ -801,10 +737,6 @@ async def _run_pipeline_impl(
         embeddings_endpoint = getattr(user_config.embeddings, "endpoint", None)
         embeddings_api_version = getattr(user_config.embeddings, "api_version", None)
 
-    # Check if the workflow has any active recordings so the engine can
-    # include recording response mode instructions in all node prompts.
-    has_recordings = await db_client.has_active_recordings(workflow.organization_id)
-
     context_compaction_enabled = (workflow.workflow_configurations or {}).get(
         "context_compaction_enabled", False
     )
@@ -859,7 +791,6 @@ async def _run_pipeline_impl(
         FunctionCallUserMuteStrategy(),
         CallbackUserMuteStrategy(should_mute_callback=engine.should_mute_user),
     ]
-    user_vad_analyzer = SileroVADAnalyzer(params=VADParams(stop_secs=0.2))
 
     # Configure turn strategies based on STT provider, model, and workflow configuration
     if is_realtime:
@@ -895,6 +826,9 @@ async def _run_pipeline_impl(
             start=user_turn_start_strategies,
             stop=user_turn_stop_strategies,
         )
+        user_vad_analyzer = resources.vad_analyzer
+        if user_vad_analyzer is None:
+            user_vad_analyzer = await create_silero_vad_analyzer_async()
 
     user_turn_stop_timeout = _resolve_user_turn_stop_timeout(
         run_configs,
@@ -1056,8 +990,8 @@ async def _run_pipeline_impl(
     engine.set_task(task)
     engine.set_transport_output(transport.output())
 
-    # Initialize the engine to set the initial context with
-    # System Prompt and Tools
+    # Initialize the engine (MCP sessions are opened in parallel with
+    # the running worker so the greeting is not blocked on tool servers).
     await engine.initialize()
 
     # Add real-time feedback observer (always logs to buffer, streams to WS if available)
@@ -1124,17 +1058,44 @@ async def _run_pipeline_impl(
 
     register_audio_data_handler(audio_buffer, workflow_run_id, in_memory_audio_buffer)
 
+    worker_run = asyncio.create_task(run_pipeline_worker(task))
     try:
-        # Run the pipeline
-        await run_pipeline_worker(task)
+        # Open MCP in this task while the pipeline (and greeting) already run.
+        # Sessions must be opened and closed in the same task (anyio scopes).
+        # Cap the wait so a slow tool server cannot delay hangup cleanup.
+        try:
+            await asyncio.wait_for(engine._open_mcp_sessions(), timeout=2.0)
+            if engine._current_node is not None:
+                try:
+                    await engine._setup_llm_context(engine._current_node)
+                except Exception:
+                    logger.warning(
+                        "Failed to refresh LLM context after MCP sessions opened",
+                        exc_info=True,
+                    )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "MCP session open timed out; call continues without waiting for tools"
+            )
+        except Exception:
+            logger.warning(
+                "Failed to open MCP sessions; call continues without MCP tools",
+                exc_info=True,
+            )
+        await worker_run
         logger.info(f"Task completed for run {workflow_run_id}")
     except asyncio.CancelledError:
         logger.warning("Received CancelledError in _run_pipeline")
     finally:
+        if not worker_run.done():
+            worker_run.cancel()
+            try:
+                await worker_run
+            except (asyncio.CancelledError, Exception):
+                pass
         # Close MCP sessions here, not in engine.cleanup(). The anyio cancel
-        # scopes opened by MCPClient.start() in engine.initialize() are
-        # task-affine; this finally runs in the same task as initialize(),
-        # whereas engine.cleanup() runs in a pipecat event-handler task.
+        # scopes opened by MCPClient.start() in this task are task-affine;
+        # engine.cleanup() runs in a pipecat event-handler task.
         await engine.close_mcp_sessions()
         await feedback_observer.cleanup()
         logger.debug(f"Cleaned up context providers for workflow run {workflow_run_id}")

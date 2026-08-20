@@ -57,6 +57,21 @@ class DograhGeminiLiveLLMService(GeminiLiveLLMService):
     # ``DograhGeminiLiveVertexLLMService`` inherits this via MRO.
     adapter_class = DograhGeminiJSONSchemaAdapter
 
+    async def push_error(
+        self,
+        error_msg: str,
+        exception: Exception | None = None,
+        fatal: bool = False,
+    ):
+        from api.services.pipecat.google_client_options import (
+            GOOGLE_GATEWAY_USER_MESSAGE,
+            is_google_html_gateway_error,
+        )
+
+        if exception is not None and is_google_html_gateway_error(exception):
+            error_msg = GOOGLE_GATEWAY_USER_MESSAGE
+        await super().push_error(error_msg=error_msg, exception=exception, fatal=fatal)
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # User-mute state, driven by broadcast UserMute{Started,Stopped}Frames.

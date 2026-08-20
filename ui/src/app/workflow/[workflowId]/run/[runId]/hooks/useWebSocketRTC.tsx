@@ -666,13 +666,44 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
         setPermissionError(null);
         setConnectionStatus('connecting');
 
+        const failWithApiKeyError = (message: string, errorCode = 'invalid_api_key') => {
+            setApiKeyModalOpen(true);
+            setApiKeyErrorCode(errorCode);
+            setApiKeyError(message);
+        };
+
+        const failWithWorkflowError = (message: string) => {
+            setWorkflowConfigModalOpen(true);
+            setWorkflowConfigError(message);
+        };
+
         try {
-            // Fetch time-limited TURN credentials from backend API only if the
-            // server reports a TURN server is configured. Skipping the request
-            // avoids a 503 on OSS local deployments that don't run coturn.
-            if (appConfig?.turnEnabled === false) {
-                logger.info('TURN server disabled in app config, using STUN only');
-            } else {
+            // Capture the microphone first so the browser keeps the click
+            // as a user gesture. Do not await network before getUserMedia.
+            if (useAudio) {
+                const audioConstraints: MediaTrackConstraints = {};
+                if (selectedAudioInput) {
+                    audioConstraints.deviceId = { exact: selectedAudioInput };
+                }
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        audio: Object.keys(audioConstraints).length ? audioConstraints : true,
+                    });
+                    stopLocalStream();
+                    localStreamRef.current = stream;
+                } catch (err) {
+                    logger.error(`Could not acquire media: ${err}`);
+                    setPermissionError('Could not acquire media');
+                    setConnectionStatus('failed');
+                    return;
+                }
+            }
+
+            const fetchTurnCredentials = async () => {
+                if (appConfig?.turnEnabled === false) {
+                    logger.info('TURN server disabled in app config, using STUN only');
+                    return;
+                }
                 try {
                     const turnResponse = await getTurnCredentialsApiV1TurnCredentialsGet({
                         headers: {
@@ -683,7 +714,6 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
                         turnCredentialsRef.current = turnResponse.data;
                         logger.info(`TURN credentials obtained, TTL: ${turnResponse.data.ttl}s`);
                     } else if (turnResponse.response?.status === 503) {
-                        // TURN not configured on server - this is OK, we'll use STUN only
                         logger.info('TURN server not configured, using STUN only');
                     } else {
                         logger.warn(`Failed to fetch TURN credentials: ${turnResponse.response?.status}`);
@@ -691,103 +721,83 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
                 } catch (e) {
                     logger.warn('Failed to fetch TURN credentials, continuing without TURN:', e);
                 }
-            }
-
-            // Validate API keys
-            const response = await validateUserConfigurationsApiV1UserConfigurationsUserValidateGet({
-                headers: {
-                    'Authorization': `Bearer ${accessToken}`,
-                },
-                query: {
-                    validity_ttl_seconds: 86400
-                },
-            });
-
-            if (response.error) {
-                setApiKeyModalOpen(true);
-                setApiKeyErrorCode('invalid_api_key');
-                let msg = 'API Key Error';
-                const detail = (response.error as unknown as { detail?: { errors: { model: string; message: string }[] } }).detail;
-                if (Array.isArray(detail)) {
-                    msg = detail
-                        .map((e: { model: string; message: string }) => `${e.model}: ${e.message}`)
-                        .join('\n');
-                }
-                setApiKeyError(msg);
-                setConnectionStatus('failed');
-                return;
-            }
-
-            // Validate workflow
-            const workflowResponse = await validateWorkflowApiV1WorkflowWorkflowIdValidatePost({
-                path: {
-                    workflow_id: workflowId,
-                },
-                headers: {
-                    'Authorization': `Bearer ${accessToken}`,
-                },
-            });
-
-            if (workflowResponse.error) {
-                setWorkflowConfigModalOpen(true);
-                let msg = 'Workflow validation failed';
-                const errorDetail = workflowResponse.error as { detail?: { errors: WorkflowValidationError[] } };
-                if (errorDetail?.detail?.errors) {
-                    msg = errorDetail.detail.errors
-                        .map(err => `${err.kind}: ${err.message}`)
-                        .join('\n');
-                }
-                setWorkflowConfigError(msg);
-                setConnectionStatus('failed');
-                return;
-            }
-
-            // Connect WebSocket first
-            await connectWebSocket();
-
-            // Create peer connection
-            timeStartRef.current = null;
-            const pc = createPeerConnection();
-
-            // Set up media constraints
-            const constraints: MediaStreamConstraints = {
-                audio: false,
             };
 
-            if (useAudio) {
-                const audioConstraints: MediaTrackConstraints = {};
-                if (selectedAudioInput) {
-                    audioConstraints.deviceId = { exact: selectedAudioInput };
-                }
-                constraints.audio = Object.keys(audioConstraints).length ? audioConstraints : true;
-            }
+            const validateConfigs = async (): Promise<'ok' | 'api-key' | 'workflow'> => {
+                const response = await validateUserConfigurationsApiV1UserConfigurationsUserValidateGet({
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                    },
+                    query: {
+                        validity_ttl_seconds: 86400
+                    },
+                });
 
-            // Get user media and negotiate
-            if (constraints.audio) {
-                try {
-                    const stream = await navigator.mediaDevices.getUserMedia(constraints);
-                    // Release any stream still held from a prior attempt before
-                    // retaining the new one, so re-entry can't leak a device.
-                    stopLocalStream();
-                    localStreamRef.current = stream;
-                    stream.getTracks().forEach((track) => {
-                        pc.addTrack(track, stream);
-                    });
-                    await negotiate();
-                } catch (err) {
-                    logger.error(`Could not acquire media: ${err}`);
-                    setPermissionError('Could not acquire media');
-                    setConnectionStatus('failed');
+                if (response.error) {
+                    let msg = 'API Key Error';
+                    const detail = (response.error as unknown as { detail?: { errors: { model: string; message: string }[] } }).detail;
+                    if (Array.isArray(detail)) {
+                        msg = detail
+                            .map((e: { model: string; message: string }) => `${e.model}: ${e.message}`)
+                            .join('\n');
+                    }
+                    failWithApiKeyError(msg);
+                    return 'api-key';
                 }
-            } else {
-                await negotiate();
+
+                const workflowResponse = await validateWorkflowApiV1WorkflowWorkflowIdValidatePost({
+                    path: {
+                        workflow_id: workflowId,
+                    },
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                    },
+                });
+
+                if (workflowResponse.error) {
+                    let msg = 'Workflow validation failed';
+                    const errorDetail = workflowResponse.error as { detail?: { errors: WorkflowValidationError[] } };
+                    if (errorDetail?.detail?.errors) {
+                        msg = errorDetail.detail.errors
+                            .map(err => `${err.kind}: ${err.message}`)
+                            .join('\n');
+                    }
+                    failWithWorkflowError(msg);
+                    return 'workflow';
+                }
+
+                return 'ok';
+            };
+
+            // TURN and signaling start in parallel with key/workflow
+            // validation. ICE must not wait on live provider pings — those
+            // can take 20s+ on a broken IPv6 path.
+            const validationPromise = validateConfigs();
+            await Promise.all([
+                fetchTurnCredentials(),
+                connectWebSocket(),
+            ]);
+
+            timeStartRef.current = null;
+            const pc = createPeerConnection();
+            if (localStreamRef.current) {
+                localStreamRef.current.getTracks().forEach((track) => {
+                    pc.addTrack(track, localStreamRef.current!);
+                });
+            }
+            await negotiate();
+
+            const validation = await validationPromise;
+            if (validation !== 'ok') {
+                cleanupConnection({ graceful: false, status: 'failed' });
+                return;
             }
         } catch (error) {
             logger.error('Failed to start connection:', error);
             if (error instanceof Error) {
                 setPermissionError(error.message);
             }
-            setConnectionStatus('failed');
+            cleanupConnection({ graceful: false, status: 'failed' });
         } finally {
             setIsStarting(false);
         }

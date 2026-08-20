@@ -15,7 +15,7 @@ from api.db import db_client
 from api.db.agent_trigger_client import TriggerPathConflictError
 from api.db.models import UserModel
 from api.db.workflow_template_client import WorkflowTemplateClient
-from api.enums import CallType, PostHogEvent, StorageBackend, WorkflowStatus
+from api.enums import PostHogEvent, StorageBackend, WorkflowStatus
 from api.schemas.ai_model_configuration import OrganizationAIModelConfigurationV2
 from api.schemas.workflow import WorkflowRunResponseSchema
 from api.schemas.workflow_configurations import WorkflowConfigurationDefaults
@@ -369,7 +369,7 @@ class CreateWorkflowRunResponse(BaseModel):
 
 
 class CreateWorkflowTemplateRequest(BaseModel):
-    call_type: Literal[CallType.INBOUND.value, CallType.OUTBOUND.value]
+    call_type: Literal["inbound", "outbound"]
     use_case: str
     activity_description: str
 
@@ -942,13 +942,13 @@ async def get_workflows_summary(
         workflows = []
         for status_value in statuses:
             workflows.extend(
-                await db_client.get_all_workflows(
+                await db_client.get_all_workflows_for_listing(
                     organization_id=user.selected_organization_id,
                     status=status_value,
                 )
             )
     else:
-        workflows = await db_client.get_all_workflows(
+        workflows = await db_client.get_all_workflows_for_listing(
             organization_id=user.selected_organization_id, status=None
         )
     return [

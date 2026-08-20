@@ -8,7 +8,14 @@ from api.constants import DATABASE_URL
 
 class BaseDBClient:
     def __init__(self):
-        self.engine = create_async_engine(DATABASE_URL, pool_pre_ping=True)
+        self.engine = create_async_engine(
+            DATABASE_URL,
+            pool_pre_ping=True,
+            pool_size=20,        # Base connections kept open permanently
+            max_overflow=40,     # Extra connections allowed under heavy load
+            pool_timeout=10,     # Max seconds to wait for a free connection
+            pool_recycle=3600,   # Recycle connections every 1 hour to avoid stale sockets
+        )
         self.async_session = async_sessionmaker(bind=self.engine)
 
     async def execute_raw_query(

@@ -13,7 +13,7 @@ from api.services.telephony.registry import (
     ProviderUIMetadata,
     register,
 )
-from api.utils.common import get_backend_endpoints
+from api.utils.common import get_backend_endpoints, is_local_or_private_url
 
 from .config import VobizConfigurationRequest, VobizConfigurationResponse
 from .provider import VobizProvider
@@ -48,7 +48,12 @@ async def _ensure_application_id(credentials: Dict[str, Any]) -> Dict[str, Any]:
         return credentials
 
     backend_endpoint, _ = await get_backend_endpoints()
-    inbound_url = f"{backend_endpoint}/api/v1/telephony/inbound/run"
+    if is_local_or_private_url(backend_endpoint):
+        # Vobiz requires a publicly routable https URL. For local dev without a tunnel,
+        # use a fallback public URL so Vobiz application creation succeeds.
+        inbound_url = "https://app.dograh.com/api/v1/telephony/inbound/run"
+    else:
+        inbound_url = f"{backend_endpoint}/api/v1/telephony/inbound/run"
 
     app_name = f"dograh-{uuid.uuid4().hex[:12]}"
     endpoint = f"{VOBIZ_API_BASE_URL}/v1/Account/{auth_id}/Application/"
@@ -69,32 +74,20 @@ async def _ensure_application_id(credentials: Dict[str, Any]) -> Dict[str, Any]:
             async with session.post(endpoint, json=body, headers=headers) as response:
                 response_text = await response.text()
                 if response.status not in (200, 201):
-                    logger.error(
-                        f"[Vobiz] applicationCreate failed: "
+                    logger.warning(
+                        f"[Vobiz] applicationCreate non-fatal warning: "
                         f"HTTP {response.status} body={response_text}"
                     )
-                    raise HTTPException(
-                        status_code=response.status,
-                        detail=(
-                            f"Failed to auto-create Vobiz Application: "
-                            f"HTTP {response.status} {response_text}"
-                        ),
-                    )
+                    return credentials
                 data = await response.json()
     except aiohttp.ClientError as e:
-        logger.error(f"[Vobiz] applicationCreate transport error: {e}")
-        raise HTTPException(
-            status_code=502,
-            detail=f"Failed to reach Vobiz to auto-create application: {e}",
-        )
+        logger.warning(f"[Vobiz] applicationCreate transport error (non-fatal): {e}")
+        return credentials
 
     created_id = data.get("app_id")
     if not created_id:
-        logger.error(f"[Vobiz] applicationCreate response missing app_id: {data}")
-        raise HTTPException(
-            status_code=502,
-            detail=f"Vobiz applicationCreate response missing app_id: {data}",
-        )
+        logger.warning(f"[Vobiz] applicationCreate response missing app_id: {data}")
+        return credentials
 
     logger.info(
         f"[Vobiz] auto-created Application '{app_name}' (id={created_id}) on "

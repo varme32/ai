@@ -12,6 +12,7 @@ from pipecat.utils.run_context import set_current_run_id
 from starlette.responses import HTMLResponse
 
 from api.db import db_client
+from api.services.pipecat.pipeline_prewarm import kickoff_pipeline_prewarm
 from api.services.telephony.base import TelephonyProvider
 from api.services.telephony.factory import get_telephony_provider_for_run
 from api.services.telephony.status_processor import (
@@ -76,6 +77,14 @@ async def handle_twiml_webhook(
         workflow_run_id=workflow_run_id,
         callback_data=callback_data,
     )
+
+    if workflow_run:
+        kickoff_pipeline_prewarm(
+            workflow_id=workflow_id,
+            workflow_run_id=workflow_run_id,
+            organization_id=organization_id,
+            provider_name=provider.PROVIDER_NAME,
+        )
 
     response_content = await provider.get_webhook_response(
         workflow_id, organization_id, workflow_run_id

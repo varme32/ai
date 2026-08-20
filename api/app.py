@@ -1,5 +1,7 @@
 """Set up logging before importing anything else"""
 
+import api.network_bootstrap  # noqa: F401  # IPv4 + gRPC DNS before HTTP clients
+
 import sentry_sdk
 
 from api.constants import (
@@ -25,6 +27,7 @@ if SENTRY_DSN and (
     print(f"Sentry initialized in environment: {ENVIRONMENT}")
 
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
@@ -67,6 +70,11 @@ async def lifespan(app: FastAPI):
         )
         await sync_manager.start()
         set_worker_sync_manager(sync_manager)
+
+        # Load Silero VAD in the background so the first call is not cold.
+        from api.services.pipecat.audio_model_warmup import warm_audio_models
+
+        asyncio.create_task(warm_audio_models())
 
         yield  # Run app
 
@@ -133,6 +141,29 @@ api_router.include_router(main_router)
 
 # main router with api prefix
 app.include_router(api_router, prefix=API_PREFIX)
+
+
+@app.get("/", include_in_schema=False)
+async def root():
+    """Browser-friendly landing page. The API itself lives under /api/v1."""
+    return {
+        "status": "ok",
+        "service": "Dograh API",
+        "version": "1.43.0",
+        "docs": "http://localhost:8000/docs",
+        "health": "http://localhost:8000/api/v1/health",
+        "openapi": "http://localhost:8000/api/v1/openapi.json",
+        "admin_ui": "http://localhost:3000",
+        "note": "This is the Dograh API. Configure workflows in the Admin UI at :3000. There is no app at /.",
+    }
+
+
+@app.get("/health", include_in_schema=False)
+async def root_health():
+    from api.routes.main import health
+
+    return await health()
+
 
 # Mount the MCP server — agents reach it at /api/v1/mcp over Streamable HTTP,
 # authenticating with the same X-API-Key header used by the REST API.

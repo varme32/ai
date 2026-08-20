@@ -13,6 +13,7 @@ from pipecat.utils.run_context import set_current_run_id
 from starlette.responses import HTMLResponse
 
 from api.db import db_client
+from api.services.pipecat.pipeline_prewarm import kickoff_pipeline_prewarm
 from api.services.telephony.factory import (
     get_telephony_provider_for_run,
 )
@@ -52,6 +53,19 @@ async def _verify_vobiz_callback(
         raise HTTPException(status_code=403, detail="Invalid webhook signature")
 
 
+@router.post(
+    "/vobiz-xml/{workflow_id}/{organization_id}/{workflow_run_id}",
+    include_in_schema=False,
+)
+async def handle_vobiz_xml_webhook_path(
+    workflow_id: int, organization_id: int, workflow_run_id: int
+):
+    """Path-based answer URL. Vobiz rejects query strings on answer_url."""
+    return await handle_vobiz_xml_webhook(
+        workflow_id, workflow_run_id, organization_id
+    )
+
+
 @router.post("/vobiz-xml", include_in_schema=False)
 async def handle_vobiz_xml_webhook(
     workflow_id: int, workflow_run_id: int, organization_id: int
@@ -72,6 +86,14 @@ async def handle_vobiz_xml_webhook(
     provider = await get_telephony_provider_for_run(workflow_run, organization_id)
 
     logger.debug(f"[run {workflow_run_id}] Using provider: {provider.PROVIDER_NAME}")
+
+    if workflow_run:
+        kickoff_pipeline_prewarm(
+            workflow_id=workflow_id,
+            workflow_run_id=workflow_run_id,
+            organization_id=organization_id,
+            provider_name=provider.PROVIDER_NAME,
+        )
 
     response_content = await provider.get_webhook_response(
         workflow_id, organization_id, workflow_run_id
@@ -226,11 +248,17 @@ async def handle_vobiz_ring_callback(
     }
     telephony_callback_logs.append(ring_log)
 
-    # Update workflow run logs
-    await db_client.update_workflow_run(
-        run_id=workflow_run_id,
-        logs={"telephony_status_callbacks": telephony_callback_logs},
-    )
+    # Update workflow run logs in background — don't make Vobiz wait for the DB write
+    async def _write_ring_log() -> None:
+        try:
+            await db_client.update_workflow_run(
+                run_id=workflow_run_id,
+                logs={"telephony_status_callbacks": telephony_callback_logs},
+            )
+        except Exception as e:
+            logger.error(f"[run {workflow_run_id}] Failed to write ring log: {e}")
+
+    asyncio.create_task(_write_ring_log())
 
     logger.info(f"[run {workflow_run_id}] Vobiz ring callback logged")
 

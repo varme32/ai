@@ -194,8 +194,8 @@ class PipecatEngine:
             # Helper that encapsulates custom tool management
             self._custom_tool_manager = CustomToolManager(self)
 
-            # Open persistent MCP server sessions for this call (degrades on failure)
-            await self._open_mcp_sessions()
+            # MCP sessions are opened by the pipeline runner in parallel with
+            # the worker so the greeting is not blocked on tool-server connect.
 
             # Helper that encapsulates context summarization
             if self._context_compaction_enabled:
