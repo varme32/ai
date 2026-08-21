@@ -35,8 +35,10 @@ from api.db.models import UserModel
 from api.enums import Environment, WorkflowRunMode
 from api.routes.turn_credentials import (
     TURN_HOST,
+    TURN_PASSWORD,
     TURN_PORT,
     TURN_SECRET,
+    TURN_USERNAME,
     generate_turn_credentials,
 )
 from api.services.auth.depends import get_user_ws
@@ -202,8 +204,9 @@ def get_ice_servers(user_id: Optional[str] = None) -> List[RTCIceServer]:
     """
     servers: List[RTCIceServer] = [RTCIceServer(urls="stun:stun.l.google.com:19302")]
 
-    # Check if TURN is configured
-    if not TURN_HOST:
+    # Skip TURN if host is not set or not publicly reachable
+    from api.utils.common import is_local_or_private_url
+    if not TURN_HOST or is_local_or_private_url(f"http://{TURN_HOST}"):
         return servers
 
     # Use time-limited credentials if TURN_SECRET is configured (recommended)
@@ -224,7 +227,22 @@ def get_ice_servers(user_id: Optional[str] = None) -> List[RTCIceServer]:
         except Exception as e:
             logger.error(f"Failed to generate TURN credentials: {e}")
 
-    # Fallback to static credentials (legacy mode - not recommended for production)
+    # Static credentials (managed TURN providers like Metered.ca)
+    if TURN_USERNAME and TURN_PASSWORD:
+        servers.append(
+            RTCIceServer(
+                urls=[
+                    f"turn:{TURN_HOST}:{TURN_PORT}",
+                    f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
+                ],
+                username=TURN_USERNAME,
+                credential=TURN_PASSWORD,
+            )
+        )
+        logger.info(f"TURN server configured with static credentials (host={TURN_HOST})")
+        return servers
+
+    # Legacy env-var static credentials fallback
     turn_username = os.getenv("TURN_USERNAME")
     turn_password = os.getenv("TURN_PASSWORD")
 

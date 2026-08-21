@@ -98,9 +98,20 @@ async def health() -> HealthResponse:
         FORCE_TURN_RELAY,
         STACK_AUTH_PROJECT_ID,
         STACK_PUBLISHABLE_CLIENT_KEY,
+        TURN_HOST,
         TURN_SECRET,
     )
+    import os
     from api.utils.common import get_backend_endpoints, is_local_or_private_url
+
+    def _is_turn_usable() -> bool:
+        """True only when a publicly reachable TURN server is fully configured."""
+        if not TURN_HOST or is_local_or_private_url(f"http://{TURN_HOST}"):
+            return False
+        has_creds = bool(TURN_SECRET) or bool(
+            os.getenv("TURN_USERNAME") and os.getenv("TURN_PASSWORD")
+        )
+        return has_creds
 
     logger.debug("Health endpoint called")
     backend_endpoint, _ = await get_backend_endpoints()
@@ -123,7 +134,7 @@ async def health() -> HealthResponse:
         tunnel_url=tunnel_url,
         deployment_mode=DEPLOYMENT_MODE,
         auth_provider=AUTH_PROVIDER,
-        turn_enabled=bool(TURN_SECRET),
+        turn_enabled=_is_turn_usable(),
         force_turn_relay=FORCE_TURN_RELAY,
         signup_enabled=ENABLE_SIGNUP,
         stack_project_id=STACK_AUTH_PROJECT_ID if is_stack else None,

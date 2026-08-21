@@ -23,6 +23,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from pydantic import BaseModel
 
+import os
+
 from api.constants import (
     ENVIRONMENT,
     TURN_CREDENTIAL_TTL,
@@ -31,6 +33,9 @@ from api.constants import (
     TURN_SECRET,
     TURN_TLS_PORT,
 )
+
+TURN_USERNAME = os.getenv("TURN_USERNAME")
+TURN_PASSWORD = os.getenv("TURN_PASSWORD")
 from api.db.models import UserModel
 from api.enums import Environment
 from api.services.auth.depends import get_user
@@ -134,26 +139,55 @@ def generate_turn_credentials(user_id: str, ttl: int = TURN_CREDENTIAL_TTL) -> d
 async def get_turn_credentials(
     user: UserModel = Depends(get_user),
 ) -> TurnCredentialsResponse:
-    """Get time-limited TURN credentials for WebRTC connections.
+    """Get TURN credentials for WebRTC connections.
 
-    This endpoint generates ephemeral TURN credentials that are:
-    - Valid for the configured TTL (default: 24 hours)
-    - Cryptographically bound to the user via HMAC
-    - Compatible with coturn's use-auth-secret mode
+    Supports two modes:
+    - **Time-limited (preferred):** TURN_SECRET set → generates HMAC credentials
+      compatible with coturn's ``use-auth-secret`` mode.
+    - **Static (managed TURN):** TURN_USERNAME + TURN_PASSWORD set → returns
+      those credentials directly. Use for hosted TURN providers like Metered.ca.
 
     Returns:
         TurnCredentialsResponse with username, password, ttl, and TURN URIs
     """
-    if not TURN_SECRET:
-        logger.warning("TURN credentials requested but TURN_SECRET not configured")
+    if not TURN_SECRET and not (TURN_USERNAME and TURN_PASSWORD):
+        logger.warning("TURN credentials requested but TURN not configured")
         raise HTTPException(
             status_code=503,
             detail="TURN server not configured",
         )
 
     try:
-        credentials = generate_turn_credentials(str(user.id))
-        logger.debug(f"Generated TURN credentials for user {user.id}")
+        if TURN_SECRET:
+            # Time-limited HMAC credentials — works with coturn use-auth-secret
+            credentials = generate_turn_credentials(str(user.id))
+            logger.debug(f"Generated time-limited TURN credentials for user {user.id}")
+        else:
+            # Static credentials — for managed TURN providers (Metered.ca, etc.)
+            uris = []
+            if ENVIRONMENT == Environment.LOCAL.value:
+                uris.extend([
+                    f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
+                    f"turn:{TURN_HOST}:{TURN_PORT}",
+                ])
+            else:
+                uris.extend([
+                    f"turn:{TURN_HOST}:{TURN_PORT}",
+                    f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
+                ])
+            if TURN_TLS_PORT:
+                uris.extend([
+                    f"turns:{TURN_HOST}:{TURN_TLS_PORT}",
+                    f"turns:{TURN_HOST}:{TURN_TLS_PORT}?transport=tcp",
+                ])
+            credentials = {
+                "username": TURN_USERNAME,
+                "password": TURN_PASSWORD,
+                "ttl": TURN_CREDENTIAL_TTL,
+                "uris": uris,
+            }
+            logger.debug(f"Returning static TURN credentials for user {user.id} (host={TURN_HOST})")
+
         return TurnCredentialsResponse(**credentials)
     except Exception as e:
         logger.error(f"Failed to generate TURN credentials: {e}")
