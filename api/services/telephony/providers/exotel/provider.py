@@ -179,7 +179,8 @@ class ExotelProvider(TelephonyProvider):
             "CallerId": from_exotel,
             "Url": answer_url,
             "StatusCallback": hangup_url,
-            "StatusCallbackEvents[0]": "terminal",
+            # Note: StatusCallbackEvents is Twilio-specific — Exotel does NOT support it.
+            # Exotel fires StatusCallback at call end automatically.
         }
 
         auth = aiohttp.BasicAuth(self.api_key, self.api_token)
