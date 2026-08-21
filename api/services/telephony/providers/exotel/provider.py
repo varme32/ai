@@ -406,6 +406,15 @@ class ExotelProvider(TelephonyProvider):
         """
         return True
 
+    async def verify_webhook_signature(
+        self, url: str, params: Dict[str, Any], signature: str
+    ) -> bool:
+        """
+        Exotel does not use per-request HMAC signatures on standard plans.
+        Always return True — security is enforced by account_sid matching upstream.
+        """
+        return True
+
     async def configure_inbound(
         self, address: str, webhook_url: Optional[str]
     ) -> ProviderSyncResult:
