@@ -10,7 +10,7 @@ ENV_FILE="$BASE_DIR/api/.env"
 
 ARQ_WORKERS=${ARQ_WORKERS:-1}
 FASTAPI_WORKERS=${FASTAPI_WORKERS:-1}
-UVICORN_BASE_PORT=${UVICORN_BASE_PORT:-8000}
+UVICORN_BASE_PORT=${PORT:-${UVICORN_BASE_PORT:-8000}}
 
 cd "$BASE_DIR"
 echo "Starting Dograh Services (DOCKER) at $(date) in BASE_DIR: ${BASE_DIR}"
@@ -59,8 +59,13 @@ start() {
 ### 4) Start services (logs go to stdout for `docker logs`)
 ###############################################################################
 
-start ari_manager           python -m api.services.telephony.ari_manager
-start campaign_orchestrator python -m api.services.campaign.campaign_orchestrator
+if [[ "${ENABLE_ARI_MANAGER:-false}" == "true" ]]; then
+  start ari_manager           python -m api.services.telephony.ari_manager
+fi
+
+if [[ "${ENABLE_CAMPAIGN_ORCHESTRATOR:-false}" == "true" ]]; then
+  start campaign_orchestrator python -m api.services.campaign.campaign_orchestrator
+fi
 
 # Spawn FASTAPI_WORKERS independent uvicorn processes on consecutive ports
 # starting at UVICORN_BASE_PORT. nginx upstream (configured in setup_remote.sh)
