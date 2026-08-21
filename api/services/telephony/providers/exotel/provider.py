@@ -1,4 +1,4 @@
-﻿"""
+"""
 Exotel implementation of the TelephonyProvider interface.
 
 Exotel API docs:
@@ -126,6 +126,20 @@ class ExotelProvider(TelephonyProvider):
             from_number = random.choice(self.from_numbers)
         logger.info(f"Selected Exotel ExoPhone {from_number} for outbound call")
 
+        # Exotel India expects numbers in local 0-prefix format (09XXXXXXXXX)
+        # Convert E.164 (+91XXXXXXXXXX) → 0XXXXXXXXXX
+        def _to_exotel_format(number: str) -> str:
+            n = number.strip()
+            if n.startswith("+91") and len(n) == 13:
+                return "0" + n[3:]   # +919513886363 → 09513886363
+            if n.startswith("91") and len(n) == 12:
+                return "0" + n[2:]   # 919513886363  → 09513886363
+            return n                  # already local format or SIP
+
+        from_exotel = _to_exotel_format(from_number)
+        to_exotel = _to_exotel_format(to_number)
+        logger.info(f"Exotel normalized: from={from_exotel}, to={to_exotel}")
+
         workflow_id = kwargs.pop("workflow_id", None)
         organization_id = kwargs.pop("organization_id", None)
         backend_endpoint, _ = await get_backend_endpoints()
@@ -158,11 +172,11 @@ class ExotelProvider(TelephonyProvider):
 
         logger.info(f"Exotel answer_url={answer_url}")
 
-        # Exotel expects form-encoded data
+        # Exotel expects form-encoded data with local-format numbers
         data = {
-            "From": from_number,
-            "To": to_number,
-            "CallerId": from_number,
+            "From": from_exotel,
+            "To": to_exotel,
+            "CallerId": from_exotel,
             "Url": answer_url,
             "StatusCallback": hangup_url,
             "StatusCallbackEvents[0]": "terminal",
