@@ -1335,6 +1335,81 @@ export type CloudonixConfigurationResponse = {
 };
 
 /**
+ * ExotelConfigurationRequest
+ *
+ * Request schema for Exotel configuration.
+ */
+export type ExotelConfigurationRequest = {
+    /**
+     * Provider
+     */
+    provider?: 'exotel';
+    /**
+     * Api Key
+     *
+     * Exotel API Key (from Settings > API Credentials in your dashboard)
+     */
+    api_key: string;
+    /**
+     * Api Token
+     *
+     * Exotel API Token
+     */
+    api_token: string;
+    /**
+     * Account Sid
+     *
+     * Exotel Account SID (e.g., exoteldemoaccount)
+     */
+    account_sid: string;
+    /**
+     * From Numbers
+     *
+     * List of ExoPhone numbers to use for outbound calls
+     */
+    from_numbers?: Array<string>;
+    /**
+     * Subdomain
+     *
+     * Exotel API subdomain. Defaults to api.exotel.com.
+     */
+    subdomain?: string | null;
+};
+
+/**
+ * ExotelConfigurationResponse
+ *
+ * Response schema for Exotel configuration with masked sensitive fields.
+ */
+export type ExotelConfigurationResponse = {
+    /**
+     * Provider
+     */
+    provider?: 'exotel';
+    /**
+     * Api Key
+     */
+    api_key: string;
+    /**
+     * Api Token
+     */
+    api_token: string;
+    /**
+     * Account Sid
+     */
+    account_sid: string;
+    /**
+     * From Numbers
+     */
+    from_numbers: Array<string>;
+    /**
+     * Subdomain
+     */
+    subdomain?: string | null;
+};
+
+
+/**
  * ContextDestinationMappingConfig
  *
  * Resolve an external-PBX destination from gathered context.
@@ -5605,6 +5680,8 @@ export type TelephonyConfigurationCreateRequest = {
     } & AriConfigurationRequest) | ({
         provider: 'cloudonix';
     } & CloudonixConfigurationRequest) | ({
+        provider: 'exotel';
+    } & ExotelConfigurationRequest) | ({
         provider: 'plivo';
     } & PlivoConfigurationRequest) | ({
         provider: 'telnyx';
@@ -5718,6 +5795,7 @@ export type TelephonyConfigurationResponse = {
     cloudonix?: CloudonixConfigurationResponse | null;
     ari?: AriConfigurationResponse | null;
     telnyx?: TelnyxConfigurationResponse | null;
+    exotel?: ExotelConfigurationResponse | null;
 };
 
 /**
@@ -5738,6 +5816,8 @@ export type TelephonyConfigurationUpdateRequest = {
     } & AriConfigurationRequest) | ({
         provider: 'cloudonix';
     } & CloudonixConfigurationRequest) | ({
+        provider: 'exotel';
+    } & ExotelConfigurationRequest) | ({
         provider: 'plivo';
     } & PlivoConfigurationRequest) | ({
         provider: 'telnyx';
@@ -12048,6 +12128,8 @@ export type SaveTelephonyConfigurationApiV1OrganizationsTelephonyConfigPostData 
     } & AriConfigurationRequest) | ({
         provider: 'cloudonix';
     } & CloudonixConfigurationRequest) | ({
+        provider: 'exotel';
+    } & ExotelConfigurationRequest) | ({
         provider: 'plivo';
     } & PlivoConfigurationRequest) | ({
         provider: 'telnyx';
