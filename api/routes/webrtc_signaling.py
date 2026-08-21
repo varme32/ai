@@ -229,17 +229,29 @@ def get_ice_servers(user_id: Optional[str] = None) -> List[RTCIceServer]:
 
     # Static credentials (managed TURN providers like Metered.ca)
     if TURN_USERNAME and TURN_PASSWORD:
+        turn_urls = [
+            f"turn:{TURN_HOST}:{TURN_PORT}",
+            f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
+        ]
+        # Add TURNS (TLS) on port 443 — this is the only outbound TCP path that
+        # is reliably open on Render/cloud hosts. Without this, the backend
+        # cannot gather a relay candidate and ICE will always fail.
+        if TURN_TLS_PORT:
+            turn_urls += [
+                f"turns:{TURN_HOST}:{TURN_TLS_PORT}",
+                f"turns:{TURN_HOST}:{TURN_TLS_PORT}?transport=tcp",
+            ]
         servers.append(
             RTCIceServer(
-                urls=[
-                    f"turn:{TURN_HOST}:{TURN_PORT}",
-                    f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
-                ],
+                urls=turn_urls,
                 username=TURN_USERNAME,
                 credential=TURN_PASSWORD,
             )
         )
-        logger.info(f"TURN server configured with static credentials (host={TURN_HOST})")
+        logger.info(
+            f"TURN server configured with static credentials (host={TURN_HOST}, "
+            f"ports: udp={TURN_PORT}, tls={TURN_TLS_PORT})"
+        )
         return servers
 
     # Legacy env-var static credentials fallback
@@ -247,12 +259,18 @@ def get_ice_servers(user_id: Optional[str] = None) -> List[RTCIceServer]:
     turn_password = os.getenv("TURN_PASSWORD")
 
     if turn_username and turn_password:
+        turn_urls = [
+            f"turn:{TURN_HOST}:{TURN_PORT}",
+            f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
+        ]
+        if TURN_TLS_PORT:
+            turn_urls += [
+                f"turns:{TURN_HOST}:{TURN_TLS_PORT}",
+                f"turns:{TURN_HOST}:{TURN_TLS_PORT}?transport=tcp",
+            ]
         servers.append(
             RTCIceServer(
-                urls=[
-                    f"turn:{TURN_HOST}:{TURN_PORT}",
-                    f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
-                ],
+                urls=turn_urls,
                 username=turn_username,
                 credential=turn_password,
             )
