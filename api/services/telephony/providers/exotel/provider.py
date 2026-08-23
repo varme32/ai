@@ -120,7 +120,7 @@ class ExotelProvider(TelephonyProvider):
         if not self.validate_config():
             raise ValueError("Exotel provider not properly configured")
 
-        endpoint = f"{self.base_url}/Calls/connect"
+        endpoint = f"{self.base_url}/Calls/connect.json"
 
         if from_number is None:
             from_number = random.choice(self.from_numbers)
