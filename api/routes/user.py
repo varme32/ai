@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from typing import List, Literal, Optional, TypedDict, Union
 
+import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from pydantic import BaseModel, ValidationError
@@ -420,7 +421,7 @@ async def reactivate_api_key(
 
 
 # Voice Configuration Endpoints
-TTSProvider = Literal["elevenlabs", "deepgram", "sarvam", "cartesia", "dograh", "rime"]
+TTSProvider = Literal["elevenlabs", "deepgram", "sarvam", "cartesia", "dograh", "rime", "murf"]
 
 
 class VoiceInfo(BaseModel):
@@ -458,6 +459,14 @@ async def get_voices(
     user: UserModel = Depends(get_user),
 ) -> VoicesResponse:
     """Get available voices for a TTS provider."""
+
+    # Murf uses the user's own API key stored in their config — no MPS proxy needed
+    if provider == "murf":
+        return await _get_murf_voices(
+            organization_id=user.selected_organization_id,
+            q=q,
+        )
+
     try:
         result = await mps_service_key_client.get_voices(
             provider=provider,
@@ -480,3 +489,71 @@ async def get_voices(
             status_code=500,
             detail=f"Failed to fetch voices for {provider}",
         )
+
+
+async def _get_murf_voices(
+    organization_id: int | None,
+    q: Optional[str] = None,
+) -> VoicesResponse:
+    """Fetch voices directly from Murf AI API using the org's stored TTS API key."""
+    from api.services.configuration.ai_model_configuration import (
+        get_resolved_ai_model_configuration,
+    )
+
+    # Retrieve the stored Murf API key from the org's AI model configuration
+    resolved = await get_resolved_ai_model_configuration(organization_id=organization_id)
+    tts_config = resolved.effective.tts if resolved.effective else None
+    api_key: str | None = None
+    if tts_config and getattr(tts_config, "provider", None) == "murf":
+        raw_key = getattr(tts_config, "api_key", None)
+        if isinstance(raw_key, list):
+            api_key = raw_key[0] if raw_key else None
+        else:
+            api_key = raw_key
+
+    if not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="No Murf API key configured. Please add your Murf API key in TTS settings first.",
+        )
+
+    murf_url = "https://api.murf.ai/v1/speech/voices"
+    headers = {"api-key": api_key, "Accept": "application/json"}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(murf_url, headers=headers) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    logger.error(f"Murf voices API error {resp.status}: {body}")
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Murf API returned {resp.status}: {body[:200]}",
+                    )
+                data = await resp.json()
+    except aiohttp.ClientError as e:
+        raise HTTPException(status_code=502, detail=f"Failed to contact Murf API: {e}")
+
+    # Murf response: list of voice objects directly or under a key
+    raw_voices = data if isinstance(data, list) else data.get("voices", [])
+
+    voices: list[VoiceInfo] = []
+    for v in raw_voices:
+        voice_id = v.get("voiceId") or v.get("voice_id") or v.get("id", "")
+        name = v.get("displayName") or v.get("name") or voice_id
+        # Optional: filter by search query
+        if q and q.lower() not in name.lower() and q.lower() not in voice_id.lower():
+            continue
+        voices.append(
+            VoiceInfo(
+                voice_id=voice_id,
+                name=name,
+                description=v.get("description"),
+                accent=v.get("accent"),
+                gender=v.get("gender"),
+                language=v.get("locale") or v.get("language"),
+                preview_url=v.get("sampleAudioUrl") or v.get("preview_url"),
+            )
+        )
+
+    return VoicesResponse(provider="murf", voices=voices)
