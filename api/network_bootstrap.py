@@ -27,5 +27,26 @@ def apply_network_bootstrap() -> None:
     _ipv4_preferred_getaddrinfo._dograh_ipv4 = True
     socket.getaddrinfo = _ipv4_preferred_getaddrinfo
 
+    # Patch aioice to prevent crashes on Python 3.13 when STUN retry timer
+    # fires after peer connection close / transport destruction.
+    try:
+        import aioice.ice
+
+        _orig_send_stun = aioice.ice.StunProtocol.send_stun
+
+        def _safe_send_stun(self, message, addr):
+            transport = getattr(self, "transport", None)
+            if transport is None or transport.is_closing():
+                return
+            try:
+                _orig_send_stun(self, message, addr)
+            except Exception:
+                pass
+
+        aioice.ice.StunProtocol.send_stun = _safe_send_stun
+    except (ImportError, AttributeError):
+        pass
+
 
 apply_network_bootstrap()
+
