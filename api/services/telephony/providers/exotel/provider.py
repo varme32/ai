@@ -297,6 +297,8 @@ class ExotelProvider(TelephonyProvider):
         workflow_id: int,
         organization_id: int,
         workflow_run_id: int,
+        initial_msg: Optional[dict] = None,
+        **kwargs,
     ) -> None:
         """
         Handle Exotel WebSocket media stream.
@@ -306,8 +308,11 @@ class ExotelProvider(TelephonyProvider):
         """
         from api.services.pipecat.run_pipeline import run_pipeline_telephony
 
-        first_msg = await websocket.receive_text()
-        start_msg = json.loads(first_msg)
+        if initial_msg is not None:
+            start_msg = initial_msg
+        else:
+            first_msg = await websocket.receive_text()
+            start_msg = json.loads(first_msg)
         logger.debug(f"[run {workflow_run_id}] Exotel first WS message: {start_msg}")
 
         if start_msg.get("event") != "start":

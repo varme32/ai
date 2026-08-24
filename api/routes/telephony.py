@@ -596,8 +596,139 @@ async def websocket_endpoint(
     )
 
 
+@router.websocket("/ws/{workflow_id}/{organization_id}")
+async def websocket_endpoint_workflow_org(
+    websocket: WebSocket, workflow_id: int, organization_id: int
+):
+    """WebSocket endpoint for telephony streams configured with workflow_id and organization_id."""
+    await websocket.accept()
+    try:
+        first_msg = await websocket.receive_text()
+        start_msg = json.loads(first_msg)
+    except Exception as e:
+        logger.error(f"Failed to receive first WebSocket message: {e}")
+        await websocket.close(code=4400, reason="Invalid start message")
+        return
+
+    call_sid = (
+        start_msg.get("start", {}).get("callSid")
+        or start_msg.get("callSid")
+        or start_msg.get("streamSid")
+    )
+
+    workflow_run = None
+    if call_sid:
+        workflow_run = await db_client.get_workflow_run_by_call_id(call_sid)
+
+    if not workflow_run:
+        from sqlalchemy import select
+        from api.db.models import WorkflowRunModel
+
+        async with db_client.async_session() as session:
+            result = await session.execute(
+                select(WorkflowRunModel)
+                .where(
+                    WorkflowRunModel.workflow_id == workflow_id,
+                    WorkflowRunModel.organization_id == organization_id,
+                    WorkflowRunModel.state == WorkflowRunState.INITIALIZED.value,
+                )
+                .order_by(WorkflowRunModel.created_at.desc())
+                .limit(1)
+            )
+            workflow_run = result.scalars().first()
+
+    if not workflow_run:
+        workflow = await db_client.get_workflow(
+            workflow_id, organization_id=organization_id
+        )
+        if not workflow:
+            logger.error(f"Workflow {workflow_id} not found for org {organization_id}")
+            await websocket.close(code=4404, reason="Workflow not found")
+            return
+
+        workflow_run = await db_client.create_workflow_run(
+            f"Telephony Stream {call_sid or ''}".strip(),
+            workflow_id,
+            WorkflowRunMode.PIPELINE,
+            user_id=workflow.user_id,
+            call_type=CallType.INBOUND,
+            initial_context={
+                "provider": "exotel",
+                "call_sid": call_sid,
+                "called_number": start_msg.get("start", {}).get("to", ""),
+                "caller_number": start_msg.get("start", {}).get("from", ""),
+            },
+            organization_id=organization_id,
+        )
+
+    await _handle_telephony_websocket(
+        websocket,
+        workflow_id,
+        organization_id,
+        workflow_run.id,
+        initial_msg=start_msg,
+    )
+
+
+@router.websocket("/ws")
+async def websocket_endpoint_generic(websocket: WebSocket):
+    """WebSocket endpoint for telephony streams without path params."""
+    await websocket.accept()
+    try:
+        first_msg = await websocket.receive_text()
+        start_msg = json.loads(first_msg)
+    except Exception as e:
+        logger.error(f"Failed to receive first WebSocket message: {e}")
+        await websocket.close(code=4400, reason="Invalid start message")
+        return
+
+    call_sid = (
+        start_msg.get("start", {}).get("callSid")
+        or start_msg.get("callSid")
+        or start_msg.get("streamSid")
+    )
+
+    workflow_run = None
+    if call_sid:
+        workflow_run = await db_client.get_workflow_run_by_call_id(call_sid)
+
+    if not workflow_run:
+        from sqlalchemy import select
+        from api.db.models import WorkflowRunModel
+
+        async with db_client.async_session() as session:
+            result = await session.execute(
+                select(WorkflowRunModel)
+                .where(
+                    WorkflowRunModel.state == WorkflowRunState.INITIALIZED.value,
+                )
+                .order_by(WorkflowRunModel.created_at.desc())
+                .limit(1)
+            )
+            workflow_run = result.scalars().first()
+
+    if not workflow_run:
+        logger.error(
+            f"No matching workflow run found for generic telephony stream (call_sid={call_sid})"
+        )
+        await websocket.close(code=4404, reason="No active workflow run found")
+        return
+
+    await _handle_telephony_websocket(
+        websocket,
+        workflow_run.workflow_id,
+        workflow_run.organization_id,
+        workflow_run.id,
+        initial_msg=start_msg,
+    )
+
+
 async def _handle_telephony_websocket(
-    websocket: WebSocket, workflow_id: int, organization_id: int, workflow_run_id: int
+    websocket: WebSocket,
+    workflow_id: int,
+    organization_id: int,
+    workflow_run_id: int,
+    initial_msg: Optional[dict] = None,
 ):
     """Shared WebSocket handler logic (connection already accepted).
 
@@ -728,7 +859,11 @@ async def _handle_telephony_websocket(
 
         # Delegate to provider-specific handler
         await provider.handle_websocket(
-            websocket, workflow_id, organization_id, workflow_run_id
+            websocket,
+            workflow_id,
+            organization_id,
+            workflow_run_id,
+            initial_msg=initial_msg,
         )
 
     except WebSocketDisconnect as e:
