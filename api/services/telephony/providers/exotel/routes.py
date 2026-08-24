@@ -1,10 +1,11 @@
-﻿"""Exotel telephony routes (webhooks, ExoML answer URLs, status callbacks).
+"""Exotel telephony routes (webhooks, ExoML answer URLs, status callbacks).
 
 Mounted under /api/v1/telephony by api.routes.telephony via the
 provider registry.
 """
 
 import json
+from typing import Optional
 
 from fastapi import APIRouter, Request
 from loguru import logger
@@ -23,36 +24,51 @@ from api.utils.telephony_helper import parse_webhook_request
 router = APIRouter()
 
 
-@router.post(
+@router.api_route(
     "/exotel-xml/{workflow_id}/{organization_id}/{workflow_run_id}",
+    methods=["GET", "POST"],
     include_in_schema=False,
 )
 async def handle_exotel_xml_webhook_path(
-    workflow_id: int, organization_id: int, workflow_run_id: int
+    workflow_id: int,
+    organization_id: int,
+    workflow_run_id: int,
+    request: Request,
 ):
     """Path-based ExoML answer URL (Exotel requires a clean URL without query strings)."""
-    return await _handle_exotel_xml(workflow_id, organization_id, workflow_run_id)
+    return await _handle_exotel_xml(
+        workflow_id, organization_id, workflow_run_id, request=request
+    )
 
 
-@router.post("/exotel-xml", include_in_schema=False)
+@router.api_route("/exotel-xml", methods=["GET", "POST"], include_in_schema=False)
 async def handle_exotel_xml_webhook(
-    workflow_id: int, workflow_run_id: int, organization_id: int
+    workflow_id: int,
+    workflow_run_id: int,
+    organization_id: int,
+    request: Request,
 ):
     """Query-string based ExoML answer URL (fallback)."""
-    return await _handle_exotel_xml(workflow_id, organization_id, workflow_run_id)
+    return await _handle_exotel_xml(
+        workflow_id, organization_id, workflow_run_id, request=request
+    )
 
 
 async def _handle_exotel_xml(
-    workflow_id: int, organization_id: int, workflow_run_id: int
+    workflow_id: int,
+    organization_id: int,
+    workflow_run_id: int,
+    request: Optional[Request] = None,
 ):
     """
     Handle Exotel answer webhook — return ExoML that starts a bidirectional stream.
     Exotel calls this URL when the remote party answers the call.
     """
     set_current_run_id(workflow_run_id)
+    req_method = request.method if request else "UNKNOWN"
     logger.info(
-        f"[run {workflow_run_id}] Exotel XML webhook called - "
-        f"workflow_id={workflow_id}, org_id={organization_id}"
+        f"[run {workflow_run_id}] ===== EXOTEL XML ENDPOINT HIT ===== "
+        f"method={req_method}, workflow_id={workflow_id}, org_id={organization_id}"
     )
 
     workflow_run = await db_client.get_workflow_run_by_id(workflow_run_id)
@@ -72,8 +88,8 @@ async def _handle_exotel_xml(
         workflow_id, organization_id, workflow_run_id
     )
 
-    logger.debug(
-        f"[run {workflow_run_id}] Exotel ExoML response generated:\n{response_content}"
+    logger.info(
+        f"[run {workflow_run_id}] Returning Exotel XML:\n{response_content}"
     )
 
     return HTMLResponse(content=response_content, media_type="application/xml")
