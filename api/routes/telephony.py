@@ -674,7 +674,7 @@ async def websocket_endpoint_workflow_org(
         workflow_run = await db_client.create_workflow_run(
             f"Inbound Call {call_sid or ''}".strip(),
             workflow_id,
-            WorkflowRunMode.PIPELINE,
+            WorkflowRunMode.EXOTEL.value,
             user_id=workflow.user_id,
             call_type=CallType.INBOUND,
             initial_context={
