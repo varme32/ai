@@ -1,9 +1,8 @@
 ﻿"""Exotel transport factory.
 
-Exotel uses a Twilio-compatible WebSocket media streams protocol:
-- MULAW audio at 8000 Hz
-- Base64-encoded audio in JSON messages
-- stream_sid / call_sid in start event
+Exotel Voicebot streams 16-bit linear PCM (8 kHz mono) as base64 JSON:
+- Incoming start/media events use snake_case (stream_sid, call_sid)
+- Outgoing media/clear frames must also use stream_sid
 """
 
 from fastapi import WebSocket

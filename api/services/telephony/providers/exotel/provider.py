@@ -11,7 +11,7 @@ Key differences from Vobiz/Twilio:
 - Form-encoded body (not JSON)
 - Returns call SID as "Sid" inside a "Call" object
 - ExoML (answer XML) uses <Stream> element similar to TwiML
-- WebSocket start event fields: streamSid, callSid (camelCase)
+- WebSocket start event fields: stream_sid, call_sid (snake_case; camelCase accepted)
 """
 
 import json
@@ -39,6 +39,37 @@ if TYPE_CHECKING:
     from fastapi import WebSocket
 
 _DEFAULT_SUBDOMAIN = "api.exotel.com"
+
+
+def _first_nonempty(*values: Any) -> str:
+    for value in values:
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def extract_exotel_start_ids(start_msg: Dict[str, Any]) -> tuple[str, str]:
+    """Return (stream_sid, call_sid) from an Exotel start event.
+
+    Exotel Voicebot/Stream events use snake_case. Older docs and Twilio-shaped
+    payloads use camelCase, so both are accepted.
+    """
+    start = start_msg.get("start") or {}
+    if not isinstance(start, dict):
+        start = {}
+    stream_sid = _first_nonempty(
+        start_msg.get("stream_sid"),
+        start.get("stream_sid"),
+        start_msg.get("streamSid"),
+        start.get("streamSid"),
+    )
+    call_sid = _first_nonempty(
+        start.get("call_sid"),
+        start_msg.get("call_sid"),
+        start.get("callSid"),
+        start_msg.get("callSid"),
+    )
+    return stream_sid, call_sid
 
 
 class ExotelProvider(TelephonyProvider):
@@ -304,7 +335,7 @@ class ExotelProvider(TelephonyProvider):
         Handle Exotel WebSocket media stream.
 
         Exotel sends a JSON "start" event first:
-          {"event": "start", "streamSid": "...", "start": {"callSid": "...", ...}}
+          {"event": "start", "stream_sid": "...", "start": {"call_sid": "...", ...}}
         """
         from api.services.pipecat.run_pipeline import run_pipeline_telephony
 
@@ -329,15 +360,13 @@ class ExotelProvider(TelephonyProvider):
             await websocket.close(code=4400, reason="Expected start event")
             return
 
-        stream_sid = start_msg.get("streamSid", "")
-        start_data = start_msg.get("start", {})
-        call_sid = start_data.get("callSid", "")
+        stream_sid, call_sid = extract_exotel_start_ids(start_msg)
 
         if not stream_sid:
             logger.error(
-                f"[run {workflow_run_id}] Missing streamSid in Exotel start event"
+                f"[run {workflow_run_id}] Missing stream_sid in Exotel start event"
             )
-            await websocket.close(code=4400, reason="Missing streamSid")
+            await websocket.close(code=4400, reason="Missing stream_sid")
             return
 
         logger.info(

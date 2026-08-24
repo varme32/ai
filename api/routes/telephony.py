@@ -55,6 +55,26 @@ from api.utils.telephony_helper import (
 router = APIRouter(prefix="/telephony")
 
 
+def _call_sid_from_start_message(start_msg: dict) -> str:
+    """Extract a call/stream identifier from a telephony start event.
+
+    Twilio-shaped payloads use camelCase; Exotel Voicebot uses snake_case.
+    """
+    start = start_msg.get("start") or {}
+    if not isinstance(start, dict):
+        start = {}
+    return (
+        start.get("call_sid")
+        or start.get("callSid")
+        or start_msg.get("call_sid")
+        or start_msg.get("callSid")
+        or start.get("stream_sid")
+        or start_msg.get("stream_sid")
+        or start_msg.get("streamSid")
+        or ""
+    )
+
+
 class InitiateCallRequest(BaseModel):
     workflow_id: int
     workflow_run_id: int | None = None
@@ -613,11 +633,7 @@ async def websocket_endpoint_workflow_org(
         await websocket.close(code=4400, reason="Invalid start message")
         return
 
-    call_sid = (
-        start_msg.get("start", {}).get("callSid")
-        or start_msg.get("callSid")
-        or start_msg.get("streamSid")
-    )
+    call_sid = _call_sid_from_start_message(start_msg)
 
     workflow = await db_client.get_workflow(
         workflow_id, organization_id=organization_id
@@ -695,11 +711,7 @@ async def websocket_endpoint_generic(websocket: WebSocket):
         await websocket.close(code=4400, reason="Invalid start message")
         return
 
-    call_sid = (
-        start_msg.get("start", {}).get("callSid")
-        or start_msg.get("callSid")
-        or start_msg.get("streamSid")
-    )
+    call_sid = _call_sid_from_start_message(start_msg)
 
     workflow_run = None
     if call_sid:
