@@ -605,6 +605,9 @@ async def websocket_endpoint_workflow_org(
     try:
         first_msg = await websocket.receive_text()
         start_msg = json.loads(first_msg)
+        while start_msg.get("event") == "connected":
+            first_msg = await websocket.receive_text()
+            start_msg = json.loads(first_msg)
     except Exception as e:
         logger.error(f"Failed to receive first WebSocket message: {e}")
         await websocket.close(code=4400, reason="Invalid start message")
@@ -684,6 +687,9 @@ async def websocket_endpoint_generic(websocket: WebSocket):
     try:
         first_msg = await websocket.receive_text()
         start_msg = json.loads(first_msg)
+        while start_msg.get("event") == "connected":
+            first_msg = await websocket.receive_text()
+            start_msg = json.loads(first_msg)
     except Exception as e:
         logger.error(f"Failed to receive first WebSocket message: {e}")
         await websocket.close(code=4400, reason="Invalid start message")

@@ -315,6 +315,13 @@ class ExotelProvider(TelephonyProvider):
             start_msg = json.loads(first_msg)
         logger.debug(f"[run {workflow_run_id}] Exotel first WS message: {start_msg}")
 
+        # Exotel sends a 'connected' event first on initial WebSocket handshake,
+        # followed by the 'start' event containing stream details.
+        while start_msg.get("event") == "connected":
+            next_msg = await websocket.receive_text()
+            start_msg = json.loads(next_msg)
+            logger.debug(f"[run {workflow_run_id}] Exotel next WS message: {start_msg}")
+
         if start_msg.get("event") != "start":
             logger.error(
                 f"[run {workflow_run_id}] Expected 'start' event, got: {start_msg.get('event')}"
