@@ -22,8 +22,8 @@ import { LANGUAGE_DISPLAY_NAMES } from "@/constants/languages";
 import { cn } from "@/lib/utils";
 
 // Providers that have MPS voice endpoints
-type TTSProviderWithVoices = "elevenlabs" | "deepgram" | "sarvam" | "cartesia" | "dograh" | "rime";
-const MPS_VOICE_PROVIDERS: TTSProviderWithVoices[] = ["elevenlabs", "deepgram", "sarvam", "cartesia", "dograh", "rime"];
+type TTSProviderWithVoices = "elevenlabs" | "deepgram" | "sarvam" | "cartesia" | "dograh" | "rime" | "murf";
+const MPS_VOICE_PROVIDERS: TTSProviderWithVoices[] = ["elevenlabs", "deepgram", "sarvam", "cartesia", "dograh", "rime", "murf"];
 const ALL_FILTER_VALUE = "__all__";
 
 interface VoiceSelectorProps {

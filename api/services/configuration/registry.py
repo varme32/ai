@@ -95,6 +95,7 @@ class ServiceProviders(str, Enum):
     AZURE_REALTIME = "azure_realtime"
     SMALLEST = "smallest"
     XAI = "xai"
+    MURF = "murf"
 
 
 class BaseServiceConfiguration(BaseModel):
@@ -126,6 +127,7 @@ class BaseServiceConfiguration(BaseModel):
         ServiceProviders.SARVAM,
         ServiceProviders.SMALLEST,
         ServiceProviders.XAI,
+        ServiceProviders.MURF,
     ]
     api_key: str | list[str]
 
@@ -272,6 +274,14 @@ INWORLD_PROVIDER_MODEL_CONFIG = provider_model_config(
 SARVAM_PROVIDER_MODEL_CONFIG = provider_model_config("Sarvam")
 CAMB_PROVIDER_MODEL_CONFIG = provider_model_config("Camb.ai")
 RIME_PROVIDER_MODEL_CONFIG = provider_model_config("Rime")
+MURF_PROVIDER_MODEL_CONFIG = provider_model_config(
+    "Murf AI",
+    description=(
+        "Murf AI Falcon 2 — ultra-low-latency streaming TTS (~100ms) "
+        "with high-quality natural voices via WebSocket."
+    ),
+    provider_docs_url="https://murf.ai/api/docs/api-reference/text-to-speech/stream",
+)
 GOOGLE_CLOUD_PROVIDER_MODEL_CONFIG = provider_model_config("Google Cloud")
 SPEECHMATICS_PROVIDER_MODEL_CONFIG = provider_model_config("Speechmatics")
 ASSEMBLYAI_PROVIDER_MODEL_CONFIG = provider_model_config("AssemblyAI")
@@ -1315,6 +1325,45 @@ class SmallestAITTSConfiguration(BaseTTSConfiguration):
     )
 
 
+MURF_TTS_MODELS = ["falcon-2"]
+MURF_TTS_VOICES = [
+    "Gordon",
+    "Terrell",
+    "Marcus",
+    "Samantha",
+    "Alicia",
+    "Dylan",
+    "Trevor",
+    "Angela",
+    "Wayne",
+    "Scarlett",
+]
+
+
+@register_tts
+class MurfTTSConfiguration(BaseTTSConfiguration):
+    model_config = MURF_PROVIDER_MODEL_CONFIG
+    provider: Literal[ServiceProviders.MURF] = ServiceProviders.MURF
+    model: str = Field(
+        default="falcon-2",
+        description="Murf AI TTS model. falcon-2 is optimised for sub-100ms conversational TTS.",
+        json_schema_extra={"examples": MURF_TTS_MODELS},
+    )
+    voice: str = Field(
+        default="Gordon",
+        description="Murf AI voice ID.",
+        json_schema_extra={
+            "examples": MURF_TTS_VOICES,
+            "allow_custom_input": True,
+        },
+    )
+    language: str = Field(
+        default="en",
+        description="ISO 639-1 language code for synthesis (e.g. 'en', 'hi').",
+        json_schema_extra={"allow_custom_input": True},
+    )
+
+
 XAI_TTS_VOICES = ["eve", "ara", "leo", "rex", "sal"]
 
 
@@ -1358,6 +1407,7 @@ TTSConfig = Annotated[
         AzureSpeechTTSConfiguration,
         SmallestAITTSConfiguration,
         XAITTSConfiguration,
+        MurfTTSConfiguration,
     ],
     Field(discriminator="provider"),
 ]

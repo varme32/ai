@@ -79,6 +79,7 @@ from pipecat.services.sarvam.stt import SarvamSTTService, SarvamSTTSettings
 from pipecat.services.sarvam.tts import SarvamTTSService, SarvamTTSSettings
 from pipecat.services.smallest.stt import SmallestSTTService, SmallestSTTSettings
 from pipecat.services.smallest.tts import SmallestTTSService, SmallestTTSSettings
+from pipecat.services.murf.tts import MurfTTSService, MurfTTSSettings
 from pipecat.services.speaches.llm import SpeachesLLMService, SpeachesLLMSettings
 from pipecat.services.speaches.stt import SpeachesSTTService, SpeachesSTTSettings
 from pipecat.services.speaches.tts import SpeachesTTSService, SpeachesTTSSettings
@@ -847,6 +848,19 @@ def create_tts_service(
             settings=XAIWebsocketTTSSettings(
                 voice=voice,
                 language=pipecat_language,
+            ),
+            text_filters=[xml_function_tag_filter],
+            skip_aggregator_types=["recording_router", "recording"],
+            silence_time_s=1.0,
+        )
+    elif user_config.tts.provider == ServiceProviders.MURF.value:
+        voice = getattr(user_config.tts, "voice", None) or "Gordon"
+        model = getattr(user_config.tts, "model", None) or "falcon-2"
+        return MurfTTSService(
+            api_key=user_config.tts.api_key,
+            settings=MurfTTSSettings(
+                model=model,
+                voice=voice,
             ),
             text_filters=[xml_function_tag_filter],
             skip_aggregator_types=["recording_router", "recording"],
