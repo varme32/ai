@@ -648,15 +648,19 @@ async def websocket_endpoint_workflow_org(
         workflow_run = await db_client.get_workflow_run_by_call_id(call_sid)
 
     if not workflow_run:
+        from datetime import datetime, timedelta, timezone
         from sqlalchemy import select
         from api.db.models import WorkflowRunModel
 
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=60)
         async with db_client.async_session() as session:
             result = await session.execute(
                 select(WorkflowRunModel)
                 .where(
                     WorkflowRunModel.workflow_id == workflow_id,
                     WorkflowRunModel.state == WorkflowRunState.INITIALIZED.value,
+                    WorkflowRunModel.mode != WorkflowRunMode.SMALLWEBRTC.value,
+                    WorkflowRunModel.created_at >= cutoff,
                 )
                 .order_by(WorkflowRunModel.created_at.desc())
                 .limit(1)
@@ -664,16 +668,11 @@ async def websocket_endpoint_workflow_org(
             workflow_run = result.scalars().first()
 
     if not workflow_run:
-        workflow = await db_client.get_workflow(
-            workflow_id, organization_id=organization_id
+        logger.info(
+            f"Creating new inbound workflow run for workflow {workflow_id}, org {organization_id}, call_sid={call_sid}"
         )
-        if not workflow:
-            logger.error(f"Workflow {workflow_id} not found for org {organization_id}")
-            await websocket.close(code=4404, reason="Workflow not found")
-            return
-
         workflow_run = await db_client.create_workflow_run(
-            f"Telephony Stream {call_sid or ''}".strip(),
+            f"Inbound Call {call_sid or ''}".strip(),
             workflow_id,
             WorkflowRunMode.PIPELINE,
             user_id=workflow.user_id,
@@ -718,14 +717,18 @@ async def websocket_endpoint_generic(websocket: WebSocket):
         workflow_run = await db_client.get_workflow_run_by_call_id(call_sid)
 
     if not workflow_run:
+        from datetime import datetime, timedelta, timezone
         from sqlalchemy import select
         from api.db.models import WorkflowRunModel
 
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=60)
         async with db_client.async_session() as session:
             result = await session.execute(
                 select(WorkflowRunModel)
                 .where(
                     WorkflowRunModel.state == WorkflowRunState.INITIALIZED.value,
+                    WorkflowRunModel.mode != WorkflowRunMode.SMALLWEBRTC.value,
+                    WorkflowRunModel.created_at >= cutoff,
                 )
                 .order_by(WorkflowRunModel.created_at.desc())
                 .limit(1)
