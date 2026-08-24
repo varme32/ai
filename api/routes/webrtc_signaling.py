@@ -38,6 +38,7 @@ from api.routes.turn_credentials import (
     TURN_PASSWORD,
     TURN_PORT,
     TURN_SECRET,
+    TURN_TLS_PORT,
     TURN_USERNAME,
     generate_turn_credentials,
 )
