@@ -671,19 +671,30 @@ async def websocket_endpoint_workflow_org(
         logger.info(
             f"Creating new inbound workflow run for workflow {workflow_id}, org {organization_id}, call_sid={call_sid}"
         )
+        from api.services.workflow.run_creation import prepare_workflow_run_inputs
+
+        run_inputs = await prepare_workflow_run_inputs(
+            db_client,
+            workflow,
+            use_draft=True,
+            include_template_context=True,
+        )
+        initial_context = {
+            **run_inputs.initial_context,
+            "provider": "exotel",
+            "call_sid": call_sid,
+            "called_number": start_msg.get("start", {}).get("to", ""),
+            "caller_number": start_msg.get("start", {}).get("from", ""),
+        }
         workflow_run = await db_client.create_workflow_run(
             f"Inbound Call {call_sid or ''}".strip(),
             workflow_id,
             WorkflowRunMode.EXOTEL.value,
             user_id=workflow.user_id,
             call_type=CallType.INBOUND,
-            initial_context={
-                "provider": "exotel",
-                "call_sid": call_sid,
-                "called_number": start_msg.get("start", {}).get("to", ""),
-                "caller_number": start_msg.get("start", {}).get("from", ""),
-            },
+            initial_context=initial_context,
             organization_id=organization_id,
+            definition_id=run_inputs.definition_id,
         )
 
     await _handle_telephony_websocket(

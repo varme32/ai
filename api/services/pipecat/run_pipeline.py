@@ -508,7 +508,11 @@ async def _load_setup_for_transport(
         get_effective_ai_model_configuration_for_workflow,
     )
 
-    run_configs = workflow_run.definition.workflow_configurations or {}
+    run_configs = (
+        workflow_run.definition.workflow_configurations
+        if workflow_run.definition
+        else getattr(workflow, "workflow_configurations", {})
+    ) or {}
     user_config = await get_effective_ai_model_configuration_for_workflow(
         organization_id=workflow.organization_id,
         workflow_configurations=run_configs,
