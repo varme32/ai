@@ -116,6 +116,7 @@ class ExotelProvider(TelephonyProvider):
         self.account_sid = config.get("account_sid")
         self.from_numbers = config.get("from_numbers", [])
         self.subdomain = config.get("subdomain") or _DEFAULT_SUBDOMAIN
+        self.app_id = config.get("app_id")
 
         if isinstance(self.from_numbers, str):
             self.from_numbers = [self.from_numbers]
@@ -143,10 +144,9 @@ class ExotelProvider(TelephonyProvider):
           Content-Type: application/x-www-form-urlencoded
 
         Required fields:
-          From   - ExoPhone number
-          To     - Destination number
-          Url    - ExoML URL (answer URL)
-          CallerId - ExoPhone (same as From for most cases)
+          From   - Destination number to be called first
+          CallerId - ExoPhone displayed to the recipient
+          Url    - ExoML URL / App Flow URL (answer URL)
         """
         if not self.validate_config():
             raise ValueError("Exotel provider not properly configured")
@@ -175,6 +175,7 @@ class ExotelProvider(TelephonyProvider):
 
         workflow_id = kwargs.pop("workflow_id", None)
         organization_id = kwargs.pop("organization_id", None)
+        app_id = kwargs.pop("app_id", None) or self.app_id
         backend_endpoint, _ = await get_backend_endpoints()
 
         try:
@@ -191,19 +192,24 @@ class ExotelProvider(TelephonyProvider):
                     "Exotel answer_url is missing workflow_id, organization_id, "
                     "or workflow_run_id"
                 )
-            answer_url = build_exotel_answer_url(
-                backend_endpoint,
-                workflow_id=int(workflow_id),
-                organization_id=int(organization_id),
-                workflow_run_id=int(workflow_run_id),
-            )
+
+            if app_id:
+                answer_url = f"http://my.exotel.com/{self.account_sid}/exoml/start_voice/{app_id}"
+                logger.info(f"Using Exotel App Flow answer_url={answer_url}")
+            else:
+                answer_url = build_exotel_answer_url(
+                    backend_endpoint,
+                    workflow_id=int(workflow_id),
+                    organization_id=int(organization_id),
+                    workflow_run_id=int(workflow_run_id),
+                )
+                logger.info(f"Exotel answer_url={answer_url}")
+
             hangup_url = build_exotel_hangup_url(
                 backend_endpoint, workflow_run_id=int(workflow_run_id)
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
-
-        logger.info(f"Exotel answer_url={answer_url}")
 
         # In Exotel's Connect API:
         # 'From' is the first party to dial (the Customer destination number)

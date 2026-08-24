@@ -1,4 +1,4 @@
-﻿"""Exotel telephony configuration schemas."""
+"""Exotel telephony configuration schemas."""
 
 from typing import List, Literal, Optional
 
@@ -25,6 +25,13 @@ class ExotelConfigurationRequest(BaseModel):
             "Set to your cluster subdomain if using a dedicated cluster."
         ),
     )
+    app_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Exotel App ID (from App Bazaar > My Apps). "
+            "Required by Exotel to connect outbound calls to your Voicebot Applet flow."
+        ),
+    )
 
 
 class ExotelConfigurationResponse(BaseModel):
@@ -36,3 +43,4 @@ class ExotelConfigurationResponse(BaseModel):
     account_sid: str
     from_numbers: List[str]
     subdomain: Optional[str] = None
+    app_id: Optional[str] = None

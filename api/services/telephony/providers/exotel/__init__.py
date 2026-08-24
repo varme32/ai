@@ -1,4 +1,4 @@
-﻿"""Exotel telephony provider package."""
+"""Exotel telephony provider package."""
 
 from api.services.telephony.registry import (
     ProviderSpec,
@@ -52,6 +52,17 @@ _UI_METADATA = ProviderUIMetadata(
             ),
             placeholder="api.exotel.com",
         ),
+        ProviderUIField(
+            name="app_id",
+            label="Exotel App ID / Flow ID",
+            type="text",
+            required=False,
+            description=(
+                "The App ID of your Voicebot Applet from Exotel Dashboard (App Bazaar > My Apps). "
+                "Required by Exotel Calls/connect API to route calls through your Voicebot flow."
+            ),
+            placeholder="e.g. 123456",
+        ),
     ],
 )
 
@@ -64,6 +75,7 @@ def _config_loader(value: dict) -> dict:
         "account_sid": value.get("account_sid"),
         "from_numbers": value.get("from_numbers", []),
         "subdomain": value.get("subdomain"),
+        "app_id": value.get("app_id"),
     }
 
 
