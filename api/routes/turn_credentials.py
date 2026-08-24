@@ -59,6 +59,82 @@ class TurnConfigResponse(BaseModel):
     host: Optional[str] = None
 
 
+def build_turn_uris(
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+    tls_port: Optional[int] = None,
+) -> List[str]:
+    """Build TURN URIs for browsers and aiortc.
+
+    Managed providers that listen on 443 (Metered OpenRelay) often speak
+    TURN-over-TCP without TLS on that port. Include that URI when the TLS
+    port is 443 so aioice — which uses only the first TURN URI — can
+    allocate a relay on cloud hosts that block UDP. Standard coturn
+    (TLS on 5349) is left as ``turns:`` so we do not hit a TLS port with
+    a plain TCP ALLOCATE.
+    """
+    host = host or TURN_HOST
+    port = TURN_PORT if port is None else port
+    tls_port = TURN_TLS_PORT if tls_port is None else tls_port
+
+    uris: List[str] = []
+    if tls_port:
+        if tls_port == 443:
+            uris.append(f"turn:{host}:{tls_port}?transport=tcp")
+        uris.extend(
+            [
+                f"turns:{host}:{tls_port}?transport=tcp",
+                f"turns:{host}:{tls_port}",
+            ]
+        )
+    uris.extend(
+        [
+            f"turn:{host}:{port}?transport=tcp",
+            f"turn:{host}:{port}",
+        ]
+    )
+    return uris
+
+
+def select_aiortc_turn_uri(uris: List[str]) -> Optional[str]:
+    """Pick the single TURN URI aiortc/aioice will actually use.
+
+    aioice accepts only one TURN server and has no fallback. A ``turns:``
+    URI against a host that speaks plain TURN-over-TCP fails the TLS
+    handshake in a few hundred milliseconds, so gathering completes with
+    only a private host candidate — fatal on Render and similar platforms.
+    Prefer plain ``turn:...?transport=tcp``.
+    """
+    for uri in uris:
+        if uri.startswith("turn:") and "transport=tcp" in uri:
+            return uri
+    for uri in uris:
+        if uri.startswith("turns:"):
+            return uri
+    for uri in uris:
+        if uri.startswith("turn:"):
+            return uri
+    return None
+
+
+def resolve_turn_credentials(user_id: str, ttl: int = TURN_CREDENTIAL_TTL) -> dict:
+    """Return TURN credentials for the configured auth mode.
+
+    Raises:
+        ValueError: If neither HMAC nor static TURN credentials are configured.
+    """
+    if TURN_SECRET:
+        return generate_turn_credentials(user_id, ttl=ttl)
+    if TURN_USERNAME and TURN_PASSWORD:
+        return {
+            "username": TURN_USERNAME,
+            "password": TURN_PASSWORD,
+            "ttl": ttl,
+            "uris": build_turn_uris(),
+        }
+    raise ValueError("TURN server not configured")
+
+
 def generate_turn_credentials(user_id: str, ttl: int = TURN_CREDENTIAL_TTL) -> dict:
     """Generate time-limited TURN credentials using HMAC-SHA1.
 
@@ -94,33 +170,11 @@ def generate_turn_credentials(user_id: str, ttl: int = TURN_CREDENTIAL_TTL) -> d
         ).digest()
     ).decode("utf-8")
 
-    # Build TURN URIs
-    # Note: aiortc and cloud environments (Render) require TURNS over TLS/TCP (port 443)
-    # first, as outbound UDP is frequently blocked or cannot punch NAT holes.
-    uris = []
-
-    # 1. Prioritize TURNS (TLS) on port 443 if configured
-    if TURN_TLS_PORT:
-        uris.extend(
-            [
-                f"turns:{TURN_HOST}:{TURN_TLS_PORT}?transport=tcp",  # TURN over TLS+TCP
-                f"turns:{TURN_HOST}:{TURN_TLS_PORT}",  # TURN over TLS
-            ]
-        )
-
-    # 2. Add TCP/UDP fallbacks
-    uris.extend(
-        [
-            f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
-            f"turn:{TURN_HOST}:{TURN_PORT}",
-        ]
-    )
-
     return {
         "username": username,
         "password": password,
         "ttl": ttl,
-        "uris": uris,
+        "uris": build_turn_uris(),
     }
 
 
@@ -139,39 +193,21 @@ async def get_turn_credentials(
     Returns:
         TurnCredentialsResponse with username, password, ttl, and TURN URIs
     """
-    if not TURN_SECRET and not (TURN_USERNAME and TURN_PASSWORD):
+    try:
+        credentials = resolve_turn_credentials(str(user.id))
+        if TURN_SECRET:
+            logger.debug(f"Generated time-limited TURN credentials for user {user.id}")
+        else:
+            logger.debug(
+                f"Returning static TURN credentials for user {user.id} (host={TURN_HOST})"
+            )
+        return TurnCredentialsResponse(**credentials)
+    except ValueError:
         logger.warning("TURN credentials requested but TURN not configured")
         raise HTTPException(
             status_code=503,
             detail="TURN server not configured",
         )
-
-    try:
-        if TURN_SECRET:
-            # Time-limited HMAC credentials — works with coturn use-auth-secret
-            credentials = generate_turn_credentials(str(user.id))
-            logger.debug(f"Generated time-limited TURN credentials for user {user.id}")
-        else:
-            # Static credentials — for managed TURN providers (Metered.ca, OpenRelay, etc.)
-            uris = []
-            if TURN_TLS_PORT:
-                uris.extend([
-                    f"turns:{TURN_HOST}:{TURN_TLS_PORT}?transport=tcp",
-                    f"turns:{TURN_HOST}:{TURN_TLS_PORT}",
-                ])
-            uris.extend([
-                f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
-                f"turn:{TURN_HOST}:{TURN_PORT}",
-            ])
-            credentials = {
-                "username": TURN_USERNAME,
-                "password": TURN_PASSWORD,
-                "ttl": TURN_CREDENTIAL_TTL,
-                "uris": uris,
-            }
-            logger.debug(f"Returning static TURN credentials for user {user.id} (host={TURN_HOST})")
-
-        return TurnCredentialsResponse(**credentials)
     except Exception as e:
         logger.error(f"Failed to generate TURN credentials: {e}")
         raise HTTPException(

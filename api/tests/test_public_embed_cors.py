@@ -128,9 +128,8 @@ def _patch_db(monkeypatch):
         "api.routes.public_embed.db_client.increment_embed_token_usage",
         _noop,
     )
-    monkeypatch.setattr("api.routes.public_embed.TURN_SECRET", "test-secret")
     monkeypatch.setattr(
-        "api.routes.public_embed.generate_turn_credentials",
+        "api.routes.public_embed.resolve_turn_credentials",
         lambda _user_id: {
             "username": "turn-user",
             "password": "turn-password",

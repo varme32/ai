@@ -33,14 +33,10 @@ from api.constants import ENVIRONMENT, FORCE_TURN_RELAY
 from api.db import db_client
 from api.db.models import UserModel
 from api.enums import Environment, WorkflowRunMode
+from api.routes import turn_credentials as turn_credentials_mod
 from api.routes.turn_credentials import (
-    TURN_HOST,
-    TURN_PASSWORD,
-    TURN_PORT,
-    TURN_SECRET,
-    TURN_TLS_PORT,
-    TURN_USERNAME,
-    generate_turn_credentials,
+    resolve_turn_credentials,
+    select_aiortc_turn_uri,
 )
 from api.services.auth.depends import get_user_ws
 from api.services.call_concurrency import (
@@ -193,6 +189,38 @@ def filter_outbound_sdp(sdp: str) -> str:
     return "\r\n".join(filtered)
 
 
+def sdp_ice_candidate_kinds(sdp: str) -> List[str]:
+    """Return short type/protocol labels for ICE candidates in an SDP body."""
+    kinds: List[str] = []
+    for line in sdp.split("\r\n"):
+        if not line.startswith("a=candidate:"):
+            continue
+        parts = line.split()
+        protocol = parts[2] if len(parts) > 2 else "?"
+        cand_type = "?"
+        if "typ" in parts:
+            typ_index = parts.index("typ")
+            if typ_index + 1 < len(parts):
+                cand_type = parts[typ_index + 1]
+        kinds.append(f"{cand_type}/{protocol}")
+    return kinds
+
+
+def sdp_has_ice_candidate(sdp: str) -> bool:
+    """True if the SDP contains at least one a=candidate line."""
+    return any(line.startswith("a=candidate:") for line in sdp.split("\r\n"))
+
+
+NO_REACHABLE_ICE_CANDIDATE_MESSAGE = (
+    "Could not establish a voice path to this server. The TURN server did not "
+    "allocate a relay candidate, and the API host has no public ICE address. "
+    "On Render and similar platforms, WebRTC requires a working TURN server "
+    "over TCP (set TURN_HOST plus TURN_USERNAME/TURN_PASSWORD, or TURN_SECRET "
+    "for coturn). TURNS-only URLs are not enough: aiortc uses a single "
+    "TURN-over-TCP URI."
+)
+
+
 def get_ice_servers(user_id: Optional[str] = None) -> List[RTCIceServer]:
     """Build ICE servers configuration including TURN if configured.
 
@@ -207,78 +235,38 @@ def get_ice_servers(user_id: Optional[str] = None) -> List[RTCIceServer]:
 
     # Skip TURN if host is not set or not publicly reachable
     from api.utils.common import is_local_or_private_url
-    if not TURN_HOST or is_local_or_private_url(f"http://{TURN_HOST}"):
+
+    turn_host = turn_credentials_mod.TURN_HOST
+    if not turn_host or is_local_or_private_url(f"http://{turn_host}"):
         return servers
 
-    # Use time-limited credentials if TURN_SECRET is configured (recommended)
-    if TURN_SECRET and user_id:
-        try:
-            credentials = generate_turn_credentials(user_id)
-            servers.append(
-                RTCIceServer(
-                    urls=credentials["uris"],
-                    username=credentials["username"],
-                    credential=credentials["password"],
-                )
-            )
-            logger.info(
-                f"TURN server configured with time-limited credentials, TTL: {credentials['ttl']}s"
-            )
-            return servers
-        except Exception as e:
-            logger.error(f"Failed to generate TURN credentials: {e}")
-
-    # Static credentials (managed TURN providers like Metered.ca, OpenRelay)
-    if TURN_USERNAME and TURN_PASSWORD:
-        turn_urls = []
-        if TURN_TLS_PORT:
-            turn_urls.extend([
-                f"turns:{TURN_HOST}:{TURN_TLS_PORT}?transport=tcp",
-                f"turns:{TURN_HOST}:{TURN_TLS_PORT}",
-            ])
-        turn_urls.extend([
-            f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
-            f"turn:{TURN_HOST}:{TURN_PORT}",
-        ])
-        servers.append(
-            RTCIceServer(
-                urls=turn_urls,
-                username=TURN_USERNAME,
-                credential=TURN_PASSWORD,
-            )
-        )
-        logger.info(
-            f"TURN server configured with static credentials (host={TURN_HOST}, "
-            f"ports: udp={TURN_PORT}, tls={TURN_TLS_PORT})"
-        )
+    try:
+        credentials = resolve_turn_credentials(user_id or "webrtc")
+    except ValueError:
+        return servers
+    except Exception as e:
+        logger.error(f"Failed to generate TURN credentials: {e}")
         return servers
 
-    # Legacy env-var static credentials fallback
-    turn_username = os.getenv("TURN_USERNAME")
-    turn_password = os.getenv("TURN_PASSWORD")
+    # aioice uses only the first TURN URI. Give it a single TCP URI so a
+    # failed TURNS handshake cannot skip relay allocation entirely.
+    aiortc_uri = select_aiortc_turn_uri(credentials["uris"])
+    if not aiortc_uri:
+        logger.warning("TURN is configured but no usable TURN URI was produced")
+        return servers
 
-    if turn_username and turn_password:
-        turn_urls = []
-        if TURN_TLS_PORT:
-            turn_urls.extend([
-                f"turns:{TURN_HOST}:{TURN_TLS_PORT}?transport=tcp",
-                f"turns:{TURN_HOST}:{TURN_TLS_PORT}",
-            ])
-        turn_urls.extend([
-            f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
-            f"turn:{TURN_HOST}:{TURN_PORT}",
-        ])
-        servers.append(
-            RTCIceServer(
-                urls=turn_urls,
-                username=turn_username,
-                credential=turn_password,
-            )
+    servers.append(
+        RTCIceServer(
+            urls=[aiortc_uri],
+            username=credentials["username"],
+            credential=credentials["password"],
         )
-        logger.warning(
-            f"TURN server configured with static credentials (consider using TURN_SECRET for time-limited auth)"
-        )
-
+    )
+    logger.info(
+        f"TURN server configured for aiortc with {aiortc_uri} "
+        f"(host={turn_host}, ports: udp={turn_credentials_mod.TURN_PORT}, "
+        f"tls={turn_credentials_mod.TURN_TLS_PORT})"
+    )
     return servers
 
 
@@ -594,6 +582,40 @@ class SignalingManager:
                 # Initialize connection with offer
                 await pc.initialize(sdp=sdp, type=type_)
 
+                answer = pc.get_answer()
+                gathered = sdp_ice_candidate_kinds(answer["sdp"])
+                filtered_sdp = filter_outbound_sdp(answer["sdp"])
+                logger.info(
+                    f"WebRTC answer ICE candidates for pc_id={pc_id}: "
+                    f"gathered={gathered or ['none']}"
+                )
+                if not sdp_has_ice_candidate(filtered_sdp):
+                    logger.error(
+                        "WebRTC answer has no reachable ICE candidates after "
+                        f"filtering (gathered={gathered or ['none']}). "
+                        "TURN allocation likely failed; aborting before pipeline start."
+                    )
+                    await ws.send_json(
+                        {
+                            "type": "error",
+                            "payload": {
+                                "error_type": "webrtc_ice_failed",
+                                "message": NO_REACHABLE_ICE_CANDIDATE_MESSAGE,
+                            },
+                        }
+                    )
+                    try:
+                        await pc.disconnect()
+                    except Exception as e:
+                        logger.debug(f"Failed to disconnect offer with no ICE path: {e}")
+                    if concurrency_bound:
+                        await call_concurrency.release_workflow_run_slot(
+                            workflow_run_id
+                        )
+                    elif concurrency_slot is not None:
+                        await call_concurrency.release_slot(concurrency_slot)
+                    return
+
                 # Store peer connection using client's pc_id
                 self._track_peer_connection(connection_key, pc_id, pc)
 
@@ -635,15 +657,11 @@ class SignalingManager:
                 )
                 pipeline_started = True
 
-                # Get answer after initialization
-                answer = pc.get_answer()
-
-                # Send answer immediately (ICE candidates will be sent separately via trickling)
                 await ws.send_json(
                     {
                         "type": "answer",
                         "payload": {
-                            "sdp": filter_outbound_sdp(answer["sdp"]),
+                            "sdp": filtered_sdp,
                             "type": answer["type"],
                             "pc_id": answer["pc_id"],
                         },

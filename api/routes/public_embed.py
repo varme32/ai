@@ -23,9 +23,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from api.db import db_client
 from api.enums import WorkflowRunMode
 from api.routes.turn_credentials import (
-    TURN_SECRET,
     TurnCredentialsResponse,
-    generate_turn_credentials,
+    resolve_turn_credentials,
 )
 from api.services.workflow.run_creation import prepare_workflow_run_inputs
 
@@ -466,17 +465,14 @@ async def get_public_turn_credentials(
     if origin:
         _allow_embed_origin(response, origin)
 
-    # Check if TURN is configured
-    if not TURN_SECRET:
+    try:
+        credentials = resolve_turn_credentials(f"embed:{session_token[:16]}")
+        return TurnCredentialsResponse(**credentials)
+    except ValueError:
         raise HTTPException(
             status_code=503,
             detail="TURN server not configured",
         )
-
-    try:
-        # Use session token as identifier for TURN credentials
-        credentials = generate_turn_credentials(f"embed:{session_token[:16]}")
-        return TurnCredentialsResponse(**credentials)
     except Exception as e:
         logger.error(f"Failed to generate TURN credentials for embed session: {e}")
         raise HTTPException(

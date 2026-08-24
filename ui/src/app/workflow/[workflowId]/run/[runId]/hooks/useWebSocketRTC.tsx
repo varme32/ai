@@ -38,6 +38,10 @@ const HANDLED_SERVICE_ERROR_TYPES = new Set([
     'quota_check_failed',
 ]);
 
+const ICE_CONNECT_TIMEOUT_MS = 20000;
+const ICE_CONNECT_TIMEOUT_MESSAGE =
+    'Could not establish a voice connection. The API host has no public ICE path (common on Render) and TURN did not allocate a relay. Check TURN_HOST plus TURN_USERNAME/TURN_PASSWORD, or TURN_SECRET for coturn.';
+
 export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initialContextVariables, onNodeTransition }: UseWebSocketRTCProps) => {
     const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('idle');
     const [connectionActive, setConnectionActive] = useState(false);
@@ -78,6 +82,8 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
     const connectionActiveRef = useRef(connectionActive);
     const isCompletedRef = useRef(isCompleted);
     const gracefulDisconnectRef = useRef(false);
+    const iceConnectedRef = useRef(false);
+    const iceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
         onNodeTransitionRef.current = onNodeTransition;
@@ -174,6 +180,11 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
         const graceful = options.graceful ?? true;
         const status = options.status ?? (graceful ? 'idle' : 'failed');
 
+        if (iceTimeoutRef.current) {
+            clearTimeout(iceTimeoutRef.current);
+            iceTimeoutRef.current = null;
+        }
+
         gracefulDisconnectRef.current = graceful;
         connectionActiveRef.current = false;
         isCompletedRef.current = graceful;
@@ -265,11 +276,15 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
                 pc.iceConnectionState === 'connected' ||
                 pc.iceConnectionState === 'completed'
             ) {
+                iceConnectedRef.current = true;
                 setConnectionStatus('connected');
                 return;
             }
 
             if (pc.connectionState === 'failed' || pc.iceConnectionState === 'failed') {
+                if (!iceConnectedRef.current) {
+                    setPermissionError(ICE_CONNECT_TIMEOUT_MESSAGE);
+                }
                 cleanupConnection({ graceful: false, status: 'failed' });
                 return;
             }
@@ -280,8 +295,17 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
                 pc.iceConnectionState === 'closed' ||
                 pc.iceConnectionState === 'disconnected'
             ) {
-                logger.info('Peer connection ended - cleaning up connection');
-                cleanupConnection({ graceful: true, status: 'idle' });
+                // ICE often goes to "disconnected" during a failed first
+                // connect. Treat that as a failed call unless we had already
+                // connected — otherwise the tester looks like it auto-hung-up.
+                if (iceConnectedRef.current) {
+                    logger.info('Peer connection ended - cleaning up connection');
+                    cleanupConnection({ graceful: true, status: 'idle' });
+                } else {
+                    logger.info('Peer connection dropped before ICE connected');
+                    setPermissionError(ICE_CONNECT_TIMEOUT_MESSAGE);
+                    cleanupConnection({ graceful: false, status: 'failed' });
+                }
             }
         };
 
@@ -660,6 +684,7 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
         gracefulDisconnectRef.current = false;
         connectionActiveRef.current = false;
         isCompletedRef.current = false;
+        iceConnectedRef.current = false;
         setIsStarting(true);
         setConnectionActive(false);
         setIsCompleted(false);
@@ -787,6 +812,17 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
             }
             await negotiate();
 
+            if (iceTimeoutRef.current) {
+                clearTimeout(iceTimeoutRef.current);
+            }
+            iceTimeoutRef.current = setTimeout(() => {
+                if (!iceConnectedRef.current) {
+                    logger.error('WebRTC ICE connect timed out');
+                    setPermissionError(ICE_CONNECT_TIMEOUT_MESSAGE);
+                    cleanupConnection({ graceful: false, status: 'failed' });
+                }
+            }, ICE_CONNECT_TIMEOUT_MS);
+
             const validation = await validationPromise;
             if (validation !== 'ok') {
                 cleanupConnection({ graceful: false, status: 'failed' });
@@ -810,6 +846,10 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
     // Cleanup on unmount
     useEffect(() => {
         return () => {
+            if (iceTimeoutRef.current) {
+                clearTimeout(iceTimeoutRef.current);
+                iceTimeoutRef.current = null;
+            }
             stopLocalStream();
             if (wsRef.current) {
                 wsRef.current.close();
