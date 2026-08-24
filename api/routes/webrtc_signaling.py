@@ -228,20 +228,18 @@ def get_ice_servers(user_id: Optional[str] = None) -> List[RTCIceServer]:
         except Exception as e:
             logger.error(f"Failed to generate TURN credentials: {e}")
 
-    # Static credentials (managed TURN providers like Metered.ca)
+    # Static credentials (managed TURN providers like Metered.ca, OpenRelay)
     if TURN_USERNAME and TURN_PASSWORD:
-        turn_urls = [
-            f"turn:{TURN_HOST}:{TURN_PORT}",
-            f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
-        ]
-        # Add TURNS (TLS) on port 443 — this is the only outbound TCP path that
-        # is reliably open on Render/cloud hosts. Without this, the backend
-        # cannot gather a relay candidate and ICE will always fail.
+        turn_urls = []
         if TURN_TLS_PORT:
-            turn_urls += [
-                f"turns:{TURN_HOST}:{TURN_TLS_PORT}",
+            turn_urls.extend([
                 f"turns:{TURN_HOST}:{TURN_TLS_PORT}?transport=tcp",
-            ]
+                f"turns:{TURN_HOST}:{TURN_TLS_PORT}",
+            ])
+        turn_urls.extend([
+            f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
+            f"turn:{TURN_HOST}:{TURN_PORT}",
+        ])
         servers.append(
             RTCIceServer(
                 urls=turn_urls,
@@ -260,15 +258,16 @@ def get_ice_servers(user_id: Optional[str] = None) -> List[RTCIceServer]:
     turn_password = os.getenv("TURN_PASSWORD")
 
     if turn_username and turn_password:
-        turn_urls = [
-            f"turn:{TURN_HOST}:{TURN_PORT}",
-            f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
-        ]
+        turn_urls = []
         if TURN_TLS_PORT:
-            turn_urls += [
-                f"turns:{TURN_HOST}:{TURN_TLS_PORT}",
+            turn_urls.extend([
                 f"turns:{TURN_HOST}:{TURN_TLS_PORT}?transport=tcp",
-            ]
+                f"turns:{TURN_HOST}:{TURN_TLS_PORT}",
+            ])
+        turn_urls.extend([
+            f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
+            f"turn:{TURN_HOST}:{TURN_PORT}",
+        ])
         servers.append(
             RTCIceServer(
                 urls=turn_urls,

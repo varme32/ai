@@ -95,37 +95,26 @@ def generate_turn_credentials(user_id: str, ttl: int = TURN_CREDENTIAL_TTL) -> d
     ).decode("utf-8")
 
     # Build TURN URIs
-    # Note: aiortc only uses the FIRST valid TURN URI, so ordering matters.
-    # Priority:
-    #   1. TURNS (TLS) if configured - most secure
-    #   2. TURN TCP for LOCAL env (macOS Docker compatibility)
-    #   3. TURN UDP for production (more efficient)
+    # Note: aiortc and cloud environments (Render) require TURNS over TLS/TCP (port 443)
+    # first, as outbound UDP is frequently blocked or cannot punch NAT holes.
     uris = []
 
-    # Add non-TLS TURN as fallback, ordered by environment
-    if ENVIRONMENT == Environment.LOCAL.value:
-        uris.extend(
-            [
-                f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",  # TCP for macOS Docker
-                f"turn:{TURN_HOST}:{TURN_PORT}",  # UDP fallback
-            ]
-        )
-    else:
-        uris.extend(
-            [
-                f"turn:{TURN_HOST}:{TURN_PORT}",  # UDP preferred for other environments
-                f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",  # TCP fallback
-            ]
-        )
-
-    # Add TLS URIs if TLS port is configured
+    # 1. Prioritize TURNS (TLS) on port 443 if configured
     if TURN_TLS_PORT:
         uris.extend(
             [
-                f"turns:{TURN_HOST}:{TURN_TLS_PORT}",  # TURN over TLS
                 f"turns:{TURN_HOST}:{TURN_TLS_PORT}?transport=tcp",  # TURN over TLS+TCP
+                f"turns:{TURN_HOST}:{TURN_TLS_PORT}",  # TURN over TLS
             ]
         )
+
+    # 2. Add TCP/UDP fallbacks
+    uris.extend(
+        [
+            f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
+            f"turn:{TURN_HOST}:{TURN_PORT}",
+        ]
+    )
 
     return {
         "username": username,
@@ -163,23 +152,17 @@ async def get_turn_credentials(
             credentials = generate_turn_credentials(str(user.id))
             logger.debug(f"Generated time-limited TURN credentials for user {user.id}")
         else:
-            # Static credentials — for managed TURN providers (Metered.ca, etc.)
+            # Static credentials — for managed TURN providers (Metered.ca, OpenRelay, etc.)
             uris = []
-            if ENVIRONMENT == Environment.LOCAL.value:
-                uris.extend([
-                    f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
-                    f"turn:{TURN_HOST}:{TURN_PORT}",
-                ])
-            else:
-                uris.extend([
-                    f"turn:{TURN_HOST}:{TURN_PORT}",
-                    f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
-                ])
             if TURN_TLS_PORT:
                 uris.extend([
-                    f"turns:{TURN_HOST}:{TURN_TLS_PORT}",
                     f"turns:{TURN_HOST}:{TURN_TLS_PORT}?transport=tcp",
+                    f"turns:{TURN_HOST}:{TURN_TLS_PORT}",
                 ])
+            uris.extend([
+                f"turn:{TURN_HOST}:{TURN_PORT}?transport=tcp",
+                f"turn:{TURN_HOST}:{TURN_PORT}",
+            ])
             credentials = {
                 "username": TURN_USERNAME,
                 "password": TURN_PASSWORD,
