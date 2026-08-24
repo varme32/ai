@@ -616,6 +616,14 @@ async def websocket_endpoint_workflow_org(
         or start_msg.get("streamSid")
     )
 
+    workflow = await db_client.get_workflow(
+        workflow_id, organization_id=organization_id
+    )
+    if not workflow:
+        logger.error(f"Workflow {workflow_id} not found for org {organization_id}")
+        await websocket.close(code=4404, reason="Workflow not found")
+        return
+
     workflow_run = None
     if call_sid:
         workflow_run = await db_client.get_workflow_run_by_call_id(call_sid)
@@ -629,7 +637,6 @@ async def websocket_endpoint_workflow_org(
                 select(WorkflowRunModel)
                 .where(
                     WorkflowRunModel.workflow_id == workflow_id,
-                    WorkflowRunModel.organization_id == organization_id,
                     WorkflowRunModel.state == WorkflowRunState.INITIALIZED.value,
                 )
                 .order_by(WorkflowRunModel.created_at.desc())
@@ -714,10 +721,16 @@ async def websocket_endpoint_generic(websocket: WebSocket):
         await websocket.close(code=4404, reason="No active workflow run found")
         return
 
+    workflow = await db_client.get_workflow_by_id(workflow_run.workflow_id)
+    if not workflow:
+        logger.error(f"Workflow {workflow_run.workflow_id} not found")
+        await websocket.close(code=4404, reason="Workflow not found")
+        return
+
     await _handle_telephony_websocket(
         websocket,
         workflow_run.workflow_id,
-        workflow_run.organization_id,
+        workflow.organization_id,
         workflow_run.id,
         initial_msg=start_msg,
     )
