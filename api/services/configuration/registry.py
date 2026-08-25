@@ -1325,8 +1325,10 @@ class SmallestAITTSConfiguration(BaseTTSConfiguration):
     )
 
 
-MURF_TTS_MODELS = ["falcon-2"]
+MURF_TTS_MODELS = ["falcon-2", "GEN2"]
 MURF_TTS_VOICES = [
+    "Anusha",
+    "Anisha",
     "Gordon",
     "Terrell",
     "Marcus",

@@ -12,6 +12,7 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any
 
+import aiohttp
 from loguru import logger
 from websockets.asyncio.client import connect as websocket_connect
 from websockets.protocol import State
@@ -101,6 +102,7 @@ class MurfTTSService(InterruptibleTTSService):
         self._base_url = base_url.rstrip("/")
         self._receive_task = None
         self._keepalive_task = None
+        self._use_http = False
 
     def can_generate_metrics(self) -> bool:
         return True
@@ -180,6 +182,9 @@ class MurfTTSService(InterruptibleTTSService):
         await self._disconnect_websocket()
 
     async def _connect_websocket(self):
+        if self._use_http:
+            await self._call_event_handler("on_connected")
+            return
         try:
             if self._websocket and self._websocket.state is State.OPEN:
                 return
@@ -197,6 +202,16 @@ class MurfTTSService(InterruptibleTTSService):
             )
             await self._call_event_handler("on_connected")
         except Exception as e:
+            err_str = str(e)
+            if "1008" in err_str or "policy violation" in err_str.lower() or "Gen2" in err_str:
+                logger.info(
+                    f"Murf WebSocket restricted this voice/model ({err_str}). "
+                    "Switching to Murf HTTP streaming to support all Telugu & Gen2 voices."
+                )
+                self._use_http = True
+                self._websocket = None
+                await self._call_event_handler("on_connected")
+                return
             await self.push_error(error_msg=f"Murf TTS connection error: {e}", exception=e)
             self._websocket = None
             await self._call_event_handler("on_connection_error", f"{e}")
@@ -265,21 +280,96 @@ class MurfTTSService(InterruptibleTTSService):
             else:
                 logger.debug(f"Murf TTS: unhandled message: {msg}")
 
+    async def _stream_http_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame | None, None]:
+        url = "https://global.api.murf.ai/v1/speech/stream"
+        headers = {
+            "api-key": self._api_key,
+            "Content-Type": "application/json",
+        }
+        voice_id = self._settings.voice or MURF_DEFAULT_VOICE
+        model_str = str(self._settings.model or "GEN2").upper()
+        if "FALCON" in model_str:
+            model = "FALCON"
+        else:
+            model = "GEN2"
+
+        data = {
+            "voice_id": str(voice_id),
+            "style": "Conversational",
+            "text": text,
+            "model": model,
+            "format": "PCM",
+            "sampleRate": self.sample_rate or 24000,
+            "channelType": "MONO",
+        }
+        if self._settings.language and self._settings.language is not NOT_GIVEN:
+            lang_str = str(self._settings.language)
+            data["locale"] = lang_str
+            data["multiNativeLocale"] = lang_str
+
+        await self.start_ttfb_metrics()
+        await self.start_tts_usage_metrics(text)
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=data) as resp:
+                    if resp.status != 200:
+                        err_body = await resp.text()
+                        logger.error(f"Murf HTTP streaming returned {resp.status}: {err_body}")
+                        yield ErrorFrame(error=f"Murf HTTP TTS error: {err_body[:200]}")
+                        yield TTSStoppedFrame(context_id=context_id)
+                        await self.stop_all_metrics()
+                        return
+
+                    await self.stop_ttfb_metrics()
+                    chunk_size = 2048
+                    while True:
+                        chunk = await resp.content.read(chunk_size)
+                        if not chunk:
+                            break
+                        frame = TTSAudioRawFrame(
+                            audio=chunk,
+                            sample_rate=self.sample_rate,
+                            num_channels=1,
+                            context_id=context_id,
+                        )
+                        yield frame
+
+                    await self.stop_all_metrics()
+                    yield TTSStoppedFrame(context_id=context_id)
+        except Exception as e:
+            logger.error(f"Murf HTTP streaming exception: {e}")
+            yield ErrorFrame(error=f"Murf HTTP TTS error: {e}")
+            yield TTSStoppedFrame(context_id=context_id)
+            await self.stop_all_metrics()
+
     @traced_tts
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame | None, None]:
         logger.debug(f"{self}: Generating TTS [{text}]")
+        if self._use_http:
+            async for frame in self._stream_http_tts(text, context_id):
+                yield frame
+            return
+
         try:
             if not self._websocket or self._websocket.state is State.CLOSED:
                 await self._connect()
+            if self._use_http:
+                async for frame in self._stream_http_tts(text, context_id):
+                    yield frame
+                return
             try:
                 await self._get_websocket().send(json.dumps(self._build_text_msg(text)))
                 await self.start_tts_usage_metrics(text)
             except Exception as e:
-                yield ErrorFrame(error=f"Murf TTS send error: {e}")
-                yield TTSStoppedFrame(context_id=context_id)
-                await self._disconnect()
-                await self._connect()
+                logger.warning(f"Murf WebSocket send failed ({e}), falling back to HTTP stream")
+                self._use_http = True
+                async for frame in self._stream_http_tts(text, context_id):
+                    yield frame
                 return
             yield None
         except Exception as e:
-            yield ErrorFrame(error=f"Murf TTS error: {e}")
+            logger.warning(f"Murf WebSocket error ({e}), falling back to HTTP stream")
+            self._use_http = True
+            async for frame in self._stream_http_tts(text, context_id):
+                yield frame
