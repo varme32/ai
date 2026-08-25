@@ -616,6 +616,7 @@ def create_tts_service(
         language = getattr(user_config.tts, "language", None) or "en"
         return CartesiaTTSService(
             api_key=user_config.tts.api_key,
+            sample_rate=audio_config.pipeline_sample_rate,
             settings=CartesiaTTSSettings(
                 voice=user_config.tts.voice,
                 model=user_config.tts.model,
@@ -859,10 +860,12 @@ def create_tts_service(
         language = getattr(user_config.tts, "language", None)
         return MurfTTSService(
             api_key=user_config.tts.api_key,
+            sample_rate=audio_config.pipeline_sample_rate,
             settings=MurfTTSSettings(
                 model=model,
                 voice=voice,
                 language=language,
+                murf_sample_rate=audio_config.pipeline_sample_rate,
             ),
             text_filters=[xml_function_tag_filter],
             skip_aggregator_types=["recording_router", "recording"],
