@@ -14,7 +14,9 @@ from api.services.configuration.registry import ServiceProviders
 from api.services.pipecat.gemini_json_schema_adapter import (
     DograhGeminiJSONSchemaAdapter,
 )
+from api.services.pipecat.cartesia_tts import DograhCartesiaTTSService
 from api.services.pipecat.minimax_tts import MiniMaxOwnedSessionTTSService
+from api.services.pipecat.tts_language import resolve_tts_language
 from api.utils.url_security import validate_user_configured_service_url
 from pipecat.services.assemblyai.stt import AssemblyAISTTService, AssemblyAISTTSettings
 from pipecat.services.aws.llm import AWSBedrockLLMService, AWSBedrockLLMSettings
@@ -23,7 +25,6 @@ from pipecat.services.azure.stt import AzureSTTService, AzureSTTSettings
 from pipecat.services.azure.tts import AzureTTSService, AzureTTSSettings
 from pipecat.services.cartesia.stt import CartesiaSTTService, CartesiaSTTSettings
 from pipecat.services.cartesia.tts import (
-    CartesiaTTSService,
     CartesiaTTSSettings,
     GenerationConfig,
 )
@@ -96,17 +97,20 @@ if TYPE_CHECKING:
 
 
 def _tts_wire_sample_rate(audio_config) -> int:
-    """Sample rate TTS must emit so PCM matches the call.
+    """Sample rate to request from the TTS provider.
 
-    Phone calls are 8 kHz; WebRTC is 16 kHz. Tagging TTS as 24 kHz while
-    the provider (or the wire) is 8 kHz plays the voice at the wrong
-    speed and makes every word unintelligible.
+    Exotel/Twilio are 8 kHz on the wire. Cartesia's pcm_s16le vocoder is
+    designed for 16 kHz+, not 8 kHz — native 8 kHz Cartesia Telugu is
+    unintelligible. Request 16 kHz and let the transport resample to 8 kHz.
     """
-    return int(
+    transport = int(
         getattr(audio_config, "transport_out_sample_rate", None)
         or getattr(audio_config, "pipeline_sample_rate", None)
         or 16000
     )
+    if transport == 8000:
+        return 16000
+    return transport
 
 
 def _tts_runtime_kwargs(text_filter, audio_config) -> dict:
@@ -632,13 +636,21 @@ def create_tts_service(
         generation_config = (
             GenerationConfig(**gen_config_kwargs) if gen_config_kwargs else None
         )
-        language = getattr(user_config.tts, "language", None) or "en"
-        return CartesiaTTSService(
+        language = resolve_tts_language(user_config, default="en")
+        try:
+            cartesia_language = Language(language)
+        except ValueError:
+            cartesia_language = language
+        logger.info(
+            f"Cartesia TTS language={language} voice={user_config.tts.voice} "
+            f"sample_rate={_tts_wire_sample_rate(audio_config)}"
+        )
+        return DograhCartesiaTTSService(
             api_key=user_config.tts.api_key,
             settings=CartesiaTTSSettings(
                 voice=user_config.tts.voice,
                 model=user_config.tts.model,
-                language=language,
+                language=cartesia_language,
                 **(
                     {"generation_config": generation_config}
                     if generation_config

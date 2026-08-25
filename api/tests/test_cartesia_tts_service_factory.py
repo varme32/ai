@@ -34,7 +34,7 @@ def test_create_cartesia_tts_service_passes_selected_model():
     )
 
     with patch(
-        "api.services.pipecat.service_factory.CartesiaTTSService"
+        "api.services.pipecat.service_factory.DograhCartesiaTTSService"
     ) as mock_service:
         create_tts_service(user_config, audio_config)
 
@@ -70,9 +70,38 @@ def test_create_cartesia_tts_service_passes_language_to_settings():
     )
 
     with patch(
-        "api.services.pipecat.service_factory.CartesiaTTSService"
+        "api.services.pipecat.service_factory.DograhCartesiaTTSService"
     ) as mock_service:
         create_tts_service(user_config, audio_config)
 
     kwargs = mock_service.call_args.kwargs
-    assert kwargs["settings"].language == "tr"
+    assert str(kwargs["settings"].language) == "tr"
+
+
+def test_create_cartesia_tts_uses_16khz_on_telephony():
+    user_config = SimpleNamespace(
+        tts=SimpleNamespace(
+            provider=ServiceProviders.CARTESIA.value,
+            api_key="test-key",
+            model="sonic-3.5",
+            voice="test-voice-id",
+            speed=1.0,
+            volume=1.0,
+            language="en",
+        ),
+        stt=SimpleNamespace(language="te-IN"),
+    )
+    audio_config = SimpleNamespace(
+        transport_out_sample_rate=8000,
+        transport_in_sample_rate=8000,
+        pipeline_sample_rate=8000,
+    )
+
+    with patch(
+        "api.services.pipecat.service_factory.DograhCartesiaTTSService"
+    ) as mock_service:
+        create_tts_service(user_config, audio_config)
+
+    kwargs = mock_service.call_args.kwargs
+    assert kwargs["sample_rate"] == 16000
+    assert str(kwargs["settings"].language) == "te"

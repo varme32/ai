@@ -50,8 +50,8 @@ def test_create_murf_tts_matches_telephony_wire_rate():
         create_tts_service(user_config, audio_config)
 
     kwargs = mock_service.call_args.kwargs
-    assert kwargs["sample_rate"] == 8000
-    assert kwargs["settings"].murf_sample_rate == 8000
+    assert kwargs["sample_rate"] == 16000
+    assert kwargs["settings"].murf_sample_rate == 16000
     assert "text_aggregation_mode" not in kwargs
 
 
@@ -71,5 +71,5 @@ def test_create_murf_gen2_also_matches_wire_rate():
         create_tts_service(user_config, audio_config)
 
     kwargs = mock_service.call_args.kwargs
-    assert kwargs["sample_rate"] == 8000
-    assert kwargs["settings"].murf_sample_rate == 8000
+    assert kwargs["sample_rate"] == 16000
+    assert kwargs["settings"].murf_sample_rate == 16000

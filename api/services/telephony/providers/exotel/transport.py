@@ -73,6 +73,9 @@ async def create_transport(
             audio_out_mixer=mixer,
             serializer=serializer,
             **realtime_param_overrides(is_realtime),
+            # Exotel rejects / garbles frames under 3.2 KB (200 ms @ 8 kHz
+            # 16-bit). 20 × 10 ms = 200 ms = 3200 bytes.
+            audio_out_10ms_chunks=20,
         ),
     )
 

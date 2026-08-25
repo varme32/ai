@@ -5,6 +5,7 @@ The handler previously looked only for Twilio-style ``streamSid`` / ``callSid``,
 which closed the socket on a real start event.
 """
 
+import base64
 import json
 from unittest.mock import AsyncMock, patch
 
@@ -175,3 +176,36 @@ async def test_exotel_serializer_emits_snake_case_stream_sid():
     message = json.loads(payload)
     assert message == {"event": "clear", "stream_sid": "stream-1"}
     assert "streamSid" not in message
+
+
+@pytest.mark.asyncio
+async def test_exotel_serializer_holds_media_until_min_chunk():
+    from pipecat.frames.frames import OutputAudioRawFrame, StartFrame
+
+    from api.services.telephony.providers.exotel.serializers import (
+        EXOTEL_MIN_MEDIA_BYTES,
+        EXOTEL_PCM_FRAME_BYTES,
+    )
+
+    serializer = ExotelFrameSerializer(stream_sid="stream-1", call_sid="call-1")
+    await serializer.setup(StartFrame(audio_in_sample_rate=8000, audio_out_sample_rate=8000))
+
+    twenty_ms = b"\x00" * EXOTEL_PCM_FRAME_BYTES
+    held = 0
+    emitted = None
+    for _ in range(EXOTEL_MIN_MEDIA_BYTES // EXOTEL_PCM_FRAME_BYTES):
+        emitted = await serializer.serialize(
+            OutputAudioRawFrame(audio=twenty_ms, sample_rate=8000, num_channels=1)
+        )
+        if emitted is None:
+            held += 1
+            continue
+        break
+
+    assert held >= 9
+    assert emitted is not None
+    message = json.loads(emitted)
+    raw = base64.b64decode(message["media"]["payload"])
+    assert len(raw) == EXOTEL_MIN_MEDIA_BYTES
+    assert len(raw) % EXOTEL_PCM_FRAME_BYTES == 0
+    assert message["stream_sid"] == "stream-1"
