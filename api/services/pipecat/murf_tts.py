@@ -31,7 +31,7 @@ from pipecat.utils.tracing.service_decorators import traced_tts
 
 
 MURF_DEFAULT_BASE_URL = "wss://global.api.murf.ai/v1/speech/stream-input"
-MURF_DEFAULT_MODEL = "falcon-2"
+MURF_DEFAULT_MODEL = "FALCON"
 MURF_DEFAULT_VOICE = "Gordon"
 MURF_DEFAULT_SAMPLE_RATE = 24000
 
