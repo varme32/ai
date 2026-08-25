@@ -17,7 +17,9 @@ from api.services.telephony.providers.exotel.provider import (
     ExotelProvider,
     extract_exotel_start_ids,
 )
+from api.services.pipecat.transport_params import realtime_param_overrides
 from api.services.telephony.providers.exotel.serializers import ExotelFrameSerializer
+from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
 # Payload captured from a live Exotel Voicebot start event.
 _LIVE_EXOTEL_START = {
@@ -167,6 +169,17 @@ async def test_handle_websocket_closes_when_stream_sid_missing():
 
     run_pipeline.assert_not_awaited()
     websocket.close.assert_awaited_once_with(code=4400, reason="Missing stream_sid")
+
+
+def test_exotel_transport_params_override_chunk_size_once():
+    kwargs = realtime_param_overrides(False)
+    kwargs["audio_out_10ms_chunks"] = 20
+    params = FastAPIWebsocketParams(
+        audio_in_enabled=True,
+        audio_out_enabled=True,
+        **kwargs,
+    )
+    assert params.audio_out_10ms_chunks == 20
 
 
 @pytest.mark.asyncio
