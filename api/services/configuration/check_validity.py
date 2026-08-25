@@ -65,6 +65,7 @@ class UserConfigurationValidator:
             ServiceProviders.MINIMAX.value: self._check_minimax_api_key,
             ServiceProviders.SMALLEST.value: self._check_smallest_api_key,
             ServiceProviders.XAI.value: self._check_xai_api_key,
+            ServiceProviders.MURF.value: self._check_murf_api_key,
         }
 
     async def validate(
@@ -458,3 +459,6 @@ class UserConfigurationValidator:
 
     def _check_smallest_api_key(self, model: str, api_key: str) -> bool:
         return True
+
+    def _check_murf_api_key(self, model: str, api_key: str) -> bool:
+        return bool(api_key and api_key.strip())
