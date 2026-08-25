@@ -119,15 +119,22 @@ class MurfTTSService(InterruptibleTTSService):
             voice_id = MURF_DEFAULT_VOICE
         model = self._settings.model
         if model is NOT_GIVEN or not model:
-            model = MURF_DEFAULT_MODEL
+            model = "FALCON"
+        elif str(model).lower().startswith("falcon"):
+            model = "FALCON"
+
+        voice_config = {
+            "voice_id": voice_id,
+            "model": model,
+            "sample_rate": self._settings.murf_sample_rate or 24000,
+            "format": "PCM",
+            "channel_type": "MONO",
+        }
+        if self._settings.language and self._settings.language is not NOT_GIVEN:
+            voice_config["locale"] = str(self._settings.language)
+
         return {
-            "voice_config": {
-                "voice_id": voice_id,
-                "model": model,
-                "sample_rate": self._settings.murf_sample_rate or 24000,
-                "format": "PCM",
-                "channel_type": "MONO",
-            }
+            "voice_config": voice_config
         }
 
     def _build_text_msg(self, text: str) -> dict:

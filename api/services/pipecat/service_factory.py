@@ -855,12 +855,14 @@ def create_tts_service(
         )
     elif user_config.tts.provider == ServiceProviders.MURF.value:
         voice = getattr(user_config.tts, "voice", None) or "Gordon"
-        model = getattr(user_config.tts, "model", None) or "falcon-2"
+        model = getattr(user_config.tts, "model", None) or "FALCON"
+        language = getattr(user_config.tts, "language", None)
         return MurfTTSService(
             api_key=user_config.tts.api_key,
             settings=MurfTTSSettings(
                 model=model,
                 voice=voice,
+                language=language,
             ),
             text_filters=[xml_function_tag_filter],
             skip_aggregator_types=["recording_router", "recording"],
