@@ -36,6 +36,10 @@ from api.constants import (
 
 TURN_USERNAME = os.getenv("TURN_USERNAME")
 TURN_PASSWORD = os.getenv("TURN_PASSWORD")
+# Metered.ca managed TURN - set METERED_API_KEY + METERED_DOMAIN in Render env vars.
+# METERED_DOMAIN is your subdomain, e.g. "nabo-voice" for nabo-voice.metered.live
+METERED_API_KEY = os.getenv("METERED_API_KEY")
+METERED_DOMAIN = os.getenv("METERED_DOMAIN")  # e.g. "nabo-voice"
 from api.db.models import UserModel
 from api.enums import Environment
 from api.services.auth.depends import get_user
@@ -123,12 +127,80 @@ def select_aiortc_turn_uri(uris: List[str]) -> Optional[str]:
     return None
 
 
+def _fetch_metered_credentials_sync() -> dict:
+    """Fetch fresh TURN credentials from Metered.ca REST API (synchronous).
+
+    Metered returns a list of ICE server objects like::
+
+        [{"urls": "turn:...", "username": "...", "credential": "..."}]
+
+    We flatten these into the standard dict format used by resolve_turn_credentials.
+
+    Raises:
+        RuntimeError: If the HTTP request fails or returns unexpected data.
+    """
+    import json
+    import urllib.request
+
+    domain = METERED_DOMAIN or "nabo-voice"
+    url = f"https://{domain}.metered.live/api/v1/turn/credentials?apiKey={METERED_API_KEY}"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            servers = json.loads(resp.read().decode())
+    except Exception as exc:
+        raise RuntimeError(f"Metered TURN API request failed: {exc}") from exc
+
+    if not isinstance(servers, list) or not servers:
+        raise RuntimeError(f"Unexpected Metered response: {servers!r}")
+
+    # Gather all URIs and pick the first credential set (they share creds)
+    uris: List[str] = []
+    username: str = ""
+    password: str = ""
+    for entry in servers:
+        raw_urls = entry.get("urls") or entry.get("url") or []
+        if isinstance(raw_urls, str):
+            raw_urls = [raw_urls]
+        uris.extend(raw_urls)
+        if not username:
+            username = entry.get("username", "")
+            password = entry.get("credential", "")
+
+    # Reorder: plain TCP entries first so aiortc/aioice picks one that works on
+    # cloud hosts where outbound UDP is blocked.
+    tcp_uris = [u for u in uris if "transport=tcp" in u and u.startswith("turn:")]
+    other_uris = [u for u in uris if u not in tcp_uris]
+    ordered_uris = tcp_uris + other_uris
+
+    logger.info(
+        f"Metered TURN credentials fetched: {len(ordered_uris)} URIs, "
+        f"first={ordered_uris[0] if ordered_uris else 'none'}"
+    )
+    return {
+        "username": username,
+        "password": password,
+        "ttl": TURN_CREDENTIAL_TTL,
+        "uris": ordered_uris,
+    }
+
+
 def resolve_turn_credentials(user_id: str, ttl: int = TURN_CREDENTIAL_TTL) -> dict:
     """Return TURN credentials for the configured auth mode.
 
+    Priority order:
+    1. Metered REST API (METERED_API_KEY + METERED_DOMAIN) — fetches live credentials
+    2. HMAC coturn (TURN_SECRET) — time-limited credentials
+    3. Static (TURN_USERNAME + TURN_PASSWORD) — plain credential pair
+
     Raises:
-        ValueError: If neither HMAC nor static TURN credentials are configured.
+        ValueError: If no TURN credentials are configured.
     """
+    if METERED_API_KEY:
+        try:
+            return _fetch_metered_credentials_sync()
+        except Exception as exc:
+            logger.error(f"Metered TURN credential fetch failed: {exc}")
+            # Fall through to other methods if available
     if TURN_SECRET:
         return generate_turn_credentials(user_id, ttl=ttl)
     if TURN_USERNAME and TURN_PASSWORD:
