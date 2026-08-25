@@ -616,7 +616,6 @@ def create_tts_service(
         language = getattr(user_config.tts, "language", None) or "en"
         return CartesiaTTSService(
             api_key=user_config.tts.api_key,
-            sample_rate=audio_config.pipeline_sample_rate,
             settings=CartesiaTTSSettings(
                 voice=user_config.tts.voice,
                 model=user_config.tts.model,
