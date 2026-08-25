@@ -74,7 +74,7 @@ def build_turn_uris(
     a plain TCP ALLOCATE.
     """
     host = host or TURN_HOST
-    is_metered = bool(host and "metered.ca" in host.lower())
+    is_metered = bool(host and "metered" in host.lower())
 
     if is_metered:
         port = port if port is not None and port != 3478 else 80
