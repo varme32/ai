@@ -150,12 +150,22 @@ class PipecatEngine:
         # True when the workflow has active recordings; enables recording
         # response mode instructions on all nodes for in-context learning.
         self._has_recordings: bool = has_recordings
+        self.tts = None
 
         # Background context summarization on node transitions
         self._context_compaction_enabled: bool = context_compaction_enabled
         self._context_summarization_manager: Optional[ContextSummarizationManager] = (
             None
         )
+
+    def set_task(self, task):
+        self.task = task
+
+    def set_tts(self, tts):
+        self.tts = tts
+
+    def set_transport_output(self, transport_output):
+        self._transport_output = transport_output
 
     async def _get_organization_id(self) -> Optional[int]:
         """Get and cache the organization ID from workflow run."""
@@ -715,14 +725,19 @@ class PipecatEngine:
                         f"Failed to fetch audio greeting {greeting_value}, "
                         "falling back to LLM generation"
                     )
-                elif greeting_value and self.task is not None:
-                    logger.debug("Playing text greeting via TTS")
+                elif greeting_value:
+                    logger.debug("Playing text greeting via TTS (direct queue)")
                     # append_to_context=True so the assistant aggregator commits
                     # the greeting to the LLM context once TTS finishes; without
                     # it the LLM would re-greet on its first generation.
-                    await self.task.queue_frame(
-                        TTSSpeakFrame(greeting_value, append_to_context=True)
-                    )
+                    if getattr(self, "tts", None) is not None:
+                        await self.tts.queue_frame(
+                            TTSSpeakFrame(greeting_value, append_to_context=True)
+                        )
+                    elif self.task is not None:
+                        await self.task.queue_frame(
+                            TTSSpeakFrame(greeting_value, append_to_context=True)
+                        )
                     return "greeting"
 
         if (

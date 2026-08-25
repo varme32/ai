@@ -993,6 +993,8 @@ async def _run_pipeline_impl(
     # Now set the task and transport output on the engine
     engine.set_task(task)
     engine.set_transport_output(transport.output())
+    if not is_realtime:
+        engine.set_tts(tts)
 
     # Initialize the engine (MCP sessions are opened in parallel with
     # the running worker so the greeting is not blocked on tool servers).
