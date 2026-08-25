@@ -194,7 +194,9 @@ async def take_pipeline_prewarm(workflow_run_id: int) -> Optional[PipelineResour
     if entry is None:
         return None
     try:
-        return await asyncio.wait_for(entry.task, timeout=2.0)
+        # Answer-time setup must reuse ring-time work instead of cancelling
+        # it at 2s and rebuilding from scratch while the caller is on the line.
+        return await asyncio.wait_for(entry.task, timeout=8.0)
     except asyncio.TimeoutError:
         entry.task.cancel()
         logger.warning(

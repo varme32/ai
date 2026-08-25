@@ -6,20 +6,27 @@ under ``api.services.telephony.providers/<name>/transport.py`` can call
 into the same place.
 """
 
-# Realtime (speech-to-speech) LLMs don't emit ``TTSStoppedFrame``, so the
-# bot-stopped-speaking signal relies on the output-queue-drained fallback.
-# The default 3s tail leaves a long gap before the assistant aggregator
-# closes its turn; 0.5s keeps the conversation snappy without cutting into
-# the bot's own audio (audio chunks arrive far more frequently than this).
-REALTIME_BOT_VAD_STOP_SECS = 0.5
+# Pipecat's TransportParams default is 3s. While the TTS queue is empty
+# (waiting on the next LLM sentence) that timeout is how long the bot is
+# still considered "speaking", which mutes the user and sounds like a
+# pause-then-play glitch. 0.5s is enough for a real TTS gap without a
+# multi-second hole on every sentence boundary.
+CALL_BOT_VAD_STOP_SECS = 0.5
+# Kept as an alias so existing realtime imports keep working.
+REALTIME_BOT_VAD_STOP_SECS = CALL_BOT_VAD_STOP_SECS
+
+# 20 ms chunks instead of the 40 ms default. Smaller frames keep the
+# telephony websocket fed more evenly and cut playout delay.
+CALL_AUDIO_OUT_10MS_CHUNKS = 2
 
 
 def realtime_param_overrides(is_realtime: bool) -> dict:
-    """Return kwargs to splat into ``TransportParams`` for the given run mode.
+    """Return kwargs to splat into ``TransportParams`` for every call.
 
-    Currently this only tunes ``bot_vad_stop_secs``; new realtime-specific
-    knobs should be added here so each transport stays a thin shim.
+    ``is_realtime`` is accepted so existing call sites keep working; the
+    output-pacing knobs apply to both cascaded and speech-to-speech runs.
     """
-    if not is_realtime:
-        return {}
-    return {"bot_vad_stop_secs": REALTIME_BOT_VAD_STOP_SECS}
+    return {
+        "bot_vad_stop_secs": CALL_BOT_VAD_STOP_SECS,
+        "audio_out_10ms_chunks": CALL_AUDIO_OUT_10MS_CHUNKS,
+    }

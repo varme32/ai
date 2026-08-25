@@ -1,8 +1,7 @@
 """Murf AI text-to-speech service — hosted inside the Dograh API package.
 
 Placed here (instead of the pipecat submodule) so the Docker build does not
-require pushing changes to an external pipecat fork.  The implementation is
-identical to what would live in pipecat/src/pipecat/services/murf/tts.py.
+require pushing changes to an external pipecat fork.
 """
 
 import asyncio
@@ -11,6 +10,7 @@ import json
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlencode
 
 import aiohttp
 from loguru import logger
@@ -32,7 +32,8 @@ from pipecat.utils.tracing.service_decorators import traced_tts
 
 
 MURF_DEFAULT_BASE_URL = "wss://global.api.murf.ai/v1/speech/stream-input"
-MURF_DEFAULT_MODEL = "FALCON"
+MURF_HTTP_STREAM_URL = "https://global.api.murf.ai/v1/speech/stream"
+MURF_DEFAULT_MODEL = "falcon-2"
 MURF_DEFAULT_VOICE = "Gordon"
 MURF_DEFAULT_SAMPLE_RATE = 24000
 
@@ -66,18 +67,27 @@ def _resolve_murf_locale(lang: Any) -> str:
     return s
 
 
+def _normalize_murf_model(model: Any) -> str:
+    """Murf only accepts ``falcon-2`` or ``gen2`` (lowercase)."""
+    s = str(model or MURF_DEFAULT_MODEL).strip().lower()
+    if s.startswith("falcon"):
+        return "falcon-2"
+    if s in ("gen2", "gen-2"):
+        return "gen2"
+    return "falcon-2"
+
+
+def _pcm_without_wav_header(audio: bytes) -> bytes:
+    if len(audio) > 44 and audio[:4] == b"RIFF":
+        return audio[44:]
+    return audio
+
+
 class MurfTTSService(InterruptibleTTSService):
     """Murf AI real-time TTS service using WebSocket streaming (Falcon 2).
 
     Provides ultra-low-latency speech synthesis (~100 ms TTFA) via Murf AI's
     Falcon 2 model over a persistent WebSocket connection.
-
-    Example::
-
-        tts = MurfTTSService(
-            api_key="your-murf-api-key",
-            settings=MurfTTSSettings(voice="Gordon", model="falcon-2"),
-        )
     """
 
     Settings = MurfTTSSettings
@@ -94,7 +104,7 @@ class MurfTTSService(InterruptibleTTSService):
         default_settings = MurfTTSSettings(
             model=MURF_DEFAULT_MODEL,
             voice=MURF_DEFAULT_VOICE,
-            murf_sample_rate=sample_rate or 24000,
+            murf_sample_rate=sample_rate or MURF_DEFAULT_SAMPLE_RATE,
         )
 
         if settings is not None:
@@ -103,7 +113,7 @@ class MurfTTSService(InterruptibleTTSService):
         effective_sample_rate = (
             sample_rate
             or (settings.murf_sample_rate if settings is not None else None)
-            or 24000
+            or MURF_DEFAULT_SAMPLE_RATE
         )
 
         super().__init__(
@@ -112,7 +122,10 @@ class MurfTTSService(InterruptibleTTSService):
             pause_frame_processing=True,
             sample_rate=effective_sample_rate,
             push_text_frames=True,
-            text_aggregation_mode=TextAggregationMode.SENTENCE,
+            text_aggregation_mode=kwargs.pop(
+                "text_aggregation_mode", TextAggregationMode.TOKEN
+            ),
+            stop_frame_timeout_s=0.8,
             settings=default_settings,
             **kwargs,
         )
@@ -128,50 +141,72 @@ class MurfTTSService(InterruptibleTTSService):
         return True
 
     async def flush_audio(self, context_id: str | None = None):
-        logger.trace(f"{self}: flushing audio")
+        """Tell Murf this turn is complete so it flushes remaining audio."""
+        if self._use_http or not self._websocket:
+            return
+        try:
+            if self._websocket.state is not State.OPEN:
+                return
+            flush_id = context_id or self.get_active_audio_context_id()
+            await self._websocket.send(
+                json.dumps(self._build_text_msg("", context_id=flush_id, end=True))
+            )
+        except Exception as e:
+            logger.warning(f"Murf TTS flush failed: {e}")
 
     def language_to_service_language(self, language) -> str | None:
         if language is None:
             return None
         return _resolve_murf_locale(language)
 
-    def _build_session_config(self) -> dict:
+    def _murf_model(self) -> str:
+        return _normalize_murf_model(self._settings.model)
+
+    def _murf_voice(self) -> str:
         voice_id = self._settings.voice
         if voice_id is NOT_GIVEN or not voice_id:
-            voice_id = MURF_DEFAULT_VOICE
-        model = self._settings.model
-        if model is NOT_GIVEN or not model:
-            model = "FALCON"
-        elif str(model).lower().startswith("falcon"):
-            model = "FALCON"
+            return MURF_DEFAULT_VOICE
+        return str(voice_id)
 
+    def _websocket_url(self) -> str:
+        query = urlencode(
+            {
+                "api-key": self._api_key,
+                "model": self._murf_model(),
+                "sample_rate": str(self.sample_rate or MURF_DEFAULT_SAMPLE_RATE),
+                "channel_type": "MONO",
+                "format": "PCM",
+            }
+        )
+        return f"{self._base_url}?{query}"
+
+    def _build_session_config(self) -> dict:
         locale_str = _resolve_murf_locale(self._settings.language)
-        voice_config = {
-            "voice_id": voice_id,
-            "voiceId": voice_id,
-            "model": model,
-            "style": "Conversational",
-            "sample_rate": self._settings.murf_sample_rate or 24000,
-            "sampleRate": self._settings.murf_sample_rate or 24000,
-            "format": "PCM",
-            "channel_type": "MONO",
-            "channelType": "MONO",
-            "locale": locale_str,
-            "multiNativeLocale": locale_str,
-        }
-
         return {
-            "voice_config": voice_config
+            "voice_config": {
+                "voiceId": self._murf_voice(),
+                "model": self._murf_model(),
+                "style": "Conversational",
+                "locale": locale_str,
+            }
         }
 
-    def _build_text_msg(self, text: str) -> dict:
-        return {"text": text}
+    def _build_text_msg(
+        self,
+        text: str,
+        context_id: str | None = None,
+        end: bool = False,
+    ) -> dict:
+        msg: dict[str, Any] = {"text": text, "end": end}
+        if context_id:
+            msg["context_id"] = context_id
+        return msg
 
     async def start(self, frame: StartFrame):
         await super().start(frame)
         if not self._http_session or self._http_session.closed:
             self._http_session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=10, connect=3)
+                timeout=aiohttp.ClientTimeout(total=None, connect=5, sock_read=30)
             )
         await self._connect()
 
@@ -211,8 +246,7 @@ class MurfTTSService(InterruptibleTTSService):
         await self._disconnect_websocket()
 
     async def _connect_websocket(self):
-        model_str = str(self._settings.model or "").upper()
-        if model_str == "GEN2":
+        if self._murf_model() == "gen2":
             self._use_http = True
             await self._call_event_handler("on_connected")
             return
@@ -225,14 +259,14 @@ class MurfTTSService(InterruptibleTTSService):
                 return
             logger.debug("Connecting to Murf TTS")
             self._websocket = await websocket_connect(
-                self._base_url,
+                self._websocket_url(),
                 additional_headers={"api-key": self._api_key},
             )
             config_msg = self._build_session_config()
             await self._websocket.send(json.dumps(config_msg))
             logger.debug(
                 f"Murf TTS session configured: "
-                f"voice={config_msg['voice_config']['voice_id']}, "
+                f"voice={config_msg['voice_config']['voiceId']}, "
                 f"model={config_msg['voice_config']['model']}"
             )
             await self._call_event_handler("on_connected")
@@ -241,7 +275,7 @@ class MurfTTSService(InterruptibleTTSService):
             if "1008" in err_str or "policy violation" in err_str.lower() or "Gen2" in err_str:
                 logger.info(
                     f"Murf WebSocket restricted this voice/model ({err_str}). "
-                    "Switching to Murf HTTP streaming to support all Telugu & Gen2 voices."
+                    "Switching to Murf HTTP streaming."
                 )
                 self._use_http = True
                 self._websocket = None
@@ -271,11 +305,13 @@ class MurfTTSService(InterruptibleTTSService):
         raise Exception("Murf WebSocket not connected")
 
     async def _keepalive_task_handler(self):
+        # Murf closes idle sockets after 3 minutes. A WebSocket ping does not
+        # synthesize audio, unlike sending ``{"text": " "}``.
         while True:
             await asyncio.sleep(30)
             if self._websocket and self._websocket.state is State.OPEN:
                 try:
-                    await self._websocket.send(json.dumps({"text": " "}))
+                    await self._websocket.ping()
                 except Exception as e:
                     logger.warning(f"Murf TTS keepalive error: {e}")
 
@@ -287,59 +323,56 @@ class MurfTTSService(InterruptibleTTSService):
                 logger.warning(f"Murf TTS: failed to parse message: {message!r}")
                 continue
 
-            event = msg.get("event") or msg.get("type") or msg.get("status")
-
-            if event in ("audio", "chunk"):
+            if "audio" in msg and msg.get("audio"):
                 await self.stop_ttfb_metrics()
-                context_id = self.get_active_audio_context_id()
-                audio_b64 = msg.get("audio") or (msg.get("data") or {}).get("audio")
-                if audio_b64:
+                context_id = msg.get("context_id") or self.get_active_audio_context_id()
+                audio = _pcm_without_wav_header(base64.b64decode(msg["audio"]))
+                if audio:
                     frame = TTSAudioRawFrame(
-                        audio=base64.b64decode(audio_b64),
+                        audio=audio,
                         sample_rate=self.sample_rate,
                         num_channels=1,
                         context_id=context_id,
                     )
                     await self.append_to_audio_context(context_id, frame)
+                continue
 
-            elif event in ("complete", "done", "end"):
+            if msg.get("final"):
+                context_id = msg.get("context_id") or self.get_active_audio_context_id()
                 await self.stop_all_metrics()
+                if context_id and self.audio_context_available(context_id):
+                    await self.append_to_audio_context(
+                        context_id, TTSStoppedFrame(context_id=context_id)
+                    )
+                    await self.remove_audio_context(context_id)
+                continue
 
-            elif event == "error":
+            error_msg = msg.get("message") or msg.get("error")
+            if error_msg or msg.get("event") == "error":
                 context_id = self.get_active_audio_context_id()
                 await self.push_frame(TTSStoppedFrame(context_id=context_id))
                 await self.stop_all_metrics()
-                error_msg = msg.get("message") or msg.get("error") or str(msg)
-                await self.push_error(error_msg=f"Murf TTS error: {error_msg}")
+                await self.push_error(error_msg=f"Murf TTS error: {error_msg or msg}")
+                continue
 
-            else:
-                logger.debug(f"Murf TTS: unhandled message: {msg}")
+            logger.debug(f"Murf TTS: unhandled message: {msg}")
 
     async def _stream_http_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame | None, None]:
-        url = "https://api.murf.ai/v1/speech/stream"
         headers = {
             "api-key": self._api_key,
             "Content-Type": "application/json",
         }
-        voice_id = self._settings.voice or MURF_DEFAULT_VOICE
-        model_str = str(self._settings.model or "GEN2").upper()
-        if "FALCON" in model_str:
-            model = "Falcon-2"
-        else:
-            model = "GEN2"
-
         data = {
-            "voice_id": str(voice_id),
+            "voiceId": self._murf_voice(),
             "style": "Conversational",
             "text": text,
-            "model": model,
+            "model": self._murf_model(),
             "format": "PCM",
-            "sampleRate": self.sample_rate or 24000,
+            "sampleRate": self.sample_rate or MURF_DEFAULT_SAMPLE_RATE,
             "channelType": "MONO",
         }
         locale_str = _resolve_murf_locale(self._settings.language)
         data["locale"] = locale_str
-        data["multiNativeLocale"] = locale_str
 
         await self.start_ttfb_metrics()
         await self.start_tts_usage_metrics(text)
@@ -348,12 +381,12 @@ class MurfTTSService(InterruptibleTTSService):
         close_session = False
         if not session or session.closed:
             session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=10, connect=3)
+                timeout=aiohttp.ClientTimeout(total=None, connect=5, sock_read=30)
             )
             close_session = True
 
         try:
-            async with session.post(url, headers=headers, json=data) as resp:
+            async with session.post(MURF_HTTP_STREAM_URL, headers=headers, json=data) as resp:
                 if resp.status != 200:
                     err_body = await resp.text()
                     logger.error(f"Murf HTTP streaming returned {resp.status}: {err_body}")
@@ -363,17 +396,12 @@ class MurfTTSService(InterruptibleTTSService):
                     return
 
                 await self.stop_ttfb_metrics()
-                chunk_size = 1024
-                while True:
-                    chunk = await resp.content.read(chunk_size)
-                    if not chunk:
-                        break
-                    frame = TTSAudioRawFrame(
-                        audio=chunk,
-                        sample_rate=self.sample_rate,
-                        num_channels=1,
-                        context_id=context_id,
-                    )
+                async for frame in self._stream_audio_frames_from_iterator(
+                    resp.content.iter_chunked(4096),
+                    strip_wav_header=True,
+                    in_sample_rate=self.sample_rate,
+                    context_id=context_id,
+                ):
                     yield frame
 
                 await self.stop_all_metrics()
@@ -403,7 +431,10 @@ class MurfTTSService(InterruptibleTTSService):
                     yield frame
                 return
             try:
-                await self._get_websocket().send(json.dumps(self._build_text_msg(text)))
+                await self.start_ttfb_metrics()
+                await self._get_websocket().send(
+                    json.dumps(self._build_text_msg(text, context_id=context_id, end=False))
+                )
                 await self.start_tts_usage_metrics(text)
             except Exception as e:
                 logger.warning(f"Murf WebSocket send failed ({e}), falling back to HTTP stream")

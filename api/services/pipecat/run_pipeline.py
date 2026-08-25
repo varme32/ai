@@ -176,7 +176,14 @@ def _create_non_realtime_user_turn_start_strategies(
         # confirms a real turn.
         return [ExternalUserTurnStartStrategy(enable_interruptions=True)]
 
-    return [TranscriptionUserTurnStartStrategy(), VADUserTurnStartStrategy()]
+    # VAD tracks speaking state but must not barge in on its own. Phone
+    # echo of the bot looks like user speech to Silero and was cutting TTS
+    # mid-sentence (pause-then-play). Real interruptions still fire from
+    # TranscriptionUserTurnStartStrategy once STT produces words.
+    return [
+        TranscriptionUserTurnStartStrategy(),
+        VADUserTurnStartStrategy(enable_interruptions=False),
+    ]
 
 
 def _create_non_realtime_user_turn_stop_strategies(
@@ -199,7 +206,7 @@ def _create_non_realtime_user_turn_stop_strategies(
             )
         ]
 
-    return [SpeechTimeoutUserTurnStopStrategy()]
+    return [SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.4)]
 
 
 def _create_realtime_user_turn_config(provider: str):

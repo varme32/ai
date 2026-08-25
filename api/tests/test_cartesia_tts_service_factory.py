@@ -6,6 +6,7 @@ from api.services.configuration.registry import (
     CartesiaTTSConfiguration,
     ServiceProviders,
 )
+from api.services.pipecat.audio_config import TTS_OUTPUT_SAMPLE_RATE
 from api.services.pipecat.service_factory import create_tts_service
 
 
@@ -41,6 +42,7 @@ def test_create_cartesia_tts_service_passes_selected_model():
     assert mock_service.call_count == 1
     kwargs = mock_service.call_args.kwargs
     assert kwargs["api_key"] == "test-key"
+    assert kwargs["sample_rate"] == TTS_OUTPUT_SAMPLE_RATE
     assert kwargs["settings"].model == "sonic-3.5"
     assert kwargs["settings"].voice == "test-voice-id"
 

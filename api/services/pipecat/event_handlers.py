@@ -182,12 +182,28 @@ def register_event_handlers(
             ):
                 asyncio.create_task(_apply_pre_call_fetch_when_ready())
 
-            await engine.set_node(engine.workflow.start_node_id)
-            await engine.queue_node_opening(
-                node_id=engine.workflow.start_node_id,
-                previous_node_id=None,
-                generate_if_no_greeting=True,
-            )
+            start_id = engine.workflow.start_node_id
+            start_node = engine.workflow.nodes.get(start_id)
+            has_greeting = engine.get_node_greeting(start_id) is not None
+            # A configured text/audio greeting does not need LLM tools or
+            # prompts. Queue it before set_node so first speech is not blocked
+            # on context setup — unless delayed_start is on, in which case
+            # set_node applies that wait first.
+            delayed_start = bool(start_node and start_node.delayed_start)
+            if has_greeting and not delayed_start:
+                await engine.queue_node_opening(
+                    node_id=start_id,
+                    previous_node_id=None,
+                    generate_if_no_greeting=False,
+                )
+                await engine.set_node(start_id)
+            else:
+                await engine.set_node(start_id)
+                await engine.queue_node_opening(
+                    node_id=start_id,
+                    previous_node_id=None,
+                    generate_if_no_greeting=not has_greeting,
+                )
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(_transport, _participant):

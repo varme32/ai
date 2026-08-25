@@ -71,7 +71,6 @@ async def create_transport(
             audio_out_sample_rate=audio_config.transport_out_sample_rate,
             audio_out_mixer=mixer,
             serializer=serializer,
-            audio_out_10ms_chunks=2,
             **realtime_param_overrides(is_realtime),
         ),
     )

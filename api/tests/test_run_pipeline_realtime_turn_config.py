@@ -146,6 +146,7 @@ def test_non_realtime_default_uses_transcription_fallback_and_vad_for_standard_s
     assert len(strategies) == 2
     assert isinstance(strategies[0], TranscriptionUserTurnStartStrategy)
     assert isinstance(strategies[1], VADUserTurnStartStrategy)
+    assert strategies[1]._enable_interruptions is False
 
 
 def test_non_realtime_can_use_min_words_start_strategy():
@@ -243,6 +244,7 @@ def test_non_realtime_default_uses_speech_timeout_stop():
 
     assert len(strategies) == 1
     assert isinstance(strategies[0], SpeechTimeoutUserTurnStopStrategy)
+    assert strategies[0]._user_speech_timeout == 0.4
 
 
 def test_non_realtime_can_use_turn_analyzer_stop_strategy(monkeypatch):
