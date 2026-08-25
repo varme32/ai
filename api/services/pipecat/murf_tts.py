@@ -182,6 +182,12 @@ class MurfTTSService(InterruptibleTTSService):
         await self._disconnect_websocket()
 
     async def _connect_websocket(self):
+        model_str = str(self._settings.model or "").upper()
+        if model_str == "GEN2":
+            self._use_http = True
+            await self._call_event_handler("on_connected")
+            return
+
         if self._use_http:
             await self._call_event_handler("on_connected")
             return
