@@ -45,7 +45,7 @@ def test_create_xai_tts_service_uses_websocket_streaming():
     assert mock_service.call_count == 1
     kwargs = mock_service.call_args.kwargs
     assert kwargs["api_key"] == "test-key"
-    assert kwargs["sample_rate"] == 24000
+    assert kwargs["sample_rate"] == audio_config.transport_out_sample_rate
     assert kwargs["settings"].voice == "rex"
     assert kwargs["settings"].language == Language.EN
 

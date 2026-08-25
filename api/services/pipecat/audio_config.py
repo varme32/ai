@@ -10,12 +10,6 @@ from typing import Optional
 
 from loguru import logger
 
-# Neural TTS vocoders are trained at 24 kHz. Telephony is 8 kHz; the
-# transport resamples 24 kHz frames down to the wire rate. Asking the
-# provider for 8 kHz makes Cartesia/Murf/ElevenLabs sound noisy and
-# metallic because it bypasses the HD vocoder.
-TTS_OUTPUT_SAMPLE_RATE = 24000
-
 
 @dataclass
 class AudioConfig:

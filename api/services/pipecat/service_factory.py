@@ -14,7 +14,6 @@ from api.services.configuration.registry import ServiceProviders
 from api.services.pipecat.gemini_json_schema_adapter import (
     DograhGeminiJSONSchemaAdapter,
 )
-from api.services.pipecat.audio_config import TTS_OUTPUT_SAMPLE_RATE
 from api.services.pipecat.minimax_tts import MiniMaxOwnedSessionTTSService
 from api.utils.url_security import validate_user_configured_service_url
 from pipecat.services.assemblyai.stt import AssemblyAISTTService, AssemblyAISTTSettings
@@ -65,6 +64,7 @@ from pipecat.services.huggingface.stt import (
 from pipecat.services.inworld.tts import InworldTTSService, InworldTTSSettings
 from pipecat.services.minimax.llm import MiniMaxLLMService
 from pipecat.services.minimax.tts import MiniMaxTTSSettings
+from pipecat.services.openai._constants import OPENAI_SAMPLE_RATE
 from pipecat.services.openai.base_llm import OpenAILLMSettings
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.openai.stt import (
@@ -88,7 +88,6 @@ from pipecat.services.speechmatics.stt import (
     SpeechmaticsSTTSettings,
 )
 from pipecat.services.xai.tts import XAITTSService, XAIWebsocketTTSSettings
-from pipecat.services.tts_service import TextAggregationMode
 from pipecat.transcriptions.language import Language
 from pipecat.utils.text.xml_function_tag_filter import XMLFunctionTagFilter
 
@@ -96,23 +95,28 @@ if TYPE_CHECKING:
     from api.services.pipecat.audio_config import AudioConfig
 
 
-def _tts_runtime_kwargs(text_filter, *, streaming: bool = False) -> dict:
-    """Shared TTS constructor kwargs.
+def _tts_wire_sample_rate(audio_config) -> int:
+    """Sample rate TTS must emit so PCM matches the call.
 
-    Always request 24 kHz PCM from the provider. Telephony transports
-    resample down to 8 kHz; generating at the wire rate makes neural
-    vocoders sound noisy. Streaming websocket TTS uses token aggregation
-    so the first audio is not held until a full sentence lands.
+    Phone calls are 8 kHz; WebRTC is 16 kHz. Tagging TTS as 24 kHz while
+    the provider (or the wire) is 8 kHz plays the voice at the wrong
+    speed and makes every word unintelligible.
     """
-    kwargs = {
-        "sample_rate": TTS_OUTPUT_SAMPLE_RATE,
+    return int(
+        getattr(audio_config, "transport_out_sample_rate", None)
+        or getattr(audio_config, "pipeline_sample_rate", None)
+        or 16000
+    )
+
+
+def _tts_runtime_kwargs(text_filter, audio_config) -> dict:
+    """Shared TTS constructor kwargs. PCM rate follows the transport."""
+    return {
+        "sample_rate": _tts_wire_sample_rate(audio_config),
         "text_filters": [text_filter],
         "skip_aggregator_types": ["recording_router", "recording"],
         "silence_time_s": 1.0,
     }
-    if streaming:
-        kwargs["text_aggregation_mode"] = TextAggregationMode.TOKEN
-    return kwargs
 
 
 DEEPGRAM_FLUX_LANGUAGE_HINTS = {
@@ -553,7 +557,7 @@ def create_tts_service(
         return DeepgramTTSService(
             api_key=user_config.tts.api_key,
             settings=DeepgramTTSSettings(voice=user_config.tts.voice),
-            **_tts_runtime_kwargs(xml_function_tag_filter, streaming=True),
+            **_tts_runtime_kwargs(xml_function_tag_filter, audio_config),
         )
     elif user_config.tts.provider == ServiceProviders.OPENAI.value:
         kwargs = {}
@@ -561,11 +565,15 @@ def create_tts_service(
         if base_url:
             _validate_runtime_service_url(base_url, "base_url")
             kwargs["base_url"] = base_url
+        tts_kwargs = _tts_runtime_kwargs(xml_function_tag_filter, audio_config)
+        # OpenAI TTS always emits 24 kHz PCM; tagging it as 8 kHz makes
+        # speech unintelligible. Transport resamples 24 kHz → wire rate.
+        tts_kwargs["sample_rate"] = OPENAI_SAMPLE_RATE
         return OpenAITTSService(
             api_key=user_config.tts.api_key,
             settings=OpenAITTSSettings(model=user_config.tts.model),
             **kwargs,
-            **_tts_runtime_kwargs(xml_function_tag_filter),
+            **tts_kwargs,
         )
     elif user_config.tts.provider == ServiceProviders.GOOGLE.value:
         model = getattr(user_config.tts, "model", None) or "chirp_3_hd"
@@ -587,7 +595,7 @@ def create_tts_service(
             credentials=credentials,
             location=location,
             settings=GoogleTTSSettings(**settings_kwargs),
-            **_tts_runtime_kwargs(xml_function_tag_filter),
+            **_tts_runtime_kwargs(xml_function_tag_filter, audio_config),
         )
     elif user_config.tts.provider == ServiceProviders.ELEVENLABS.value:
         # Backward compatible with older configuration "Name - voice_id"
@@ -611,7 +619,7 @@ def create_tts_service(
                 speed=user_config.tts.speed,
                 similarity_boost=0.75,
             ),
-            **_tts_runtime_kwargs(xml_function_tag_filter, streaming=True),
+            **_tts_runtime_kwargs(xml_function_tag_filter, audio_config),
         )
     elif user_config.tts.provider == ServiceProviders.CARTESIA.value:
         speed = getattr(user_config.tts, "speed", None)
@@ -637,8 +645,7 @@ def create_tts_service(
                     else {}
                 ),
             ),
-            max_buffer_delay_ms=150,
-            **_tts_runtime_kwargs(xml_function_tag_filter, streaming=True),
+            **_tts_runtime_kwargs(xml_function_tag_filter, audio_config),
         )
     elif user_config.tts.provider == ServiceProviders.INWORLD.value:
         voice = getattr(user_config.tts, "voice", None) or "Ashley"
@@ -655,7 +662,7 @@ def create_tts_service(
                 speaking_rate=speed,
                 delivery_mode=delivery_mode,
             ),
-            **_tts_runtime_kwargs(xml_function_tag_filter, streaming=True),
+            **_tts_runtime_kwargs(xml_function_tag_filter, audio_config),
         )
     elif user_config.tts.provider == ServiceProviders.DOGRAH.value:
         # Convert HTTP URL to WebSocket URL for TTS
@@ -669,7 +676,7 @@ def create_tts_service(
                 voice=user_config.tts.voice,
                 speed=user_config.tts.speed,
             ),
-            **_tts_runtime_kwargs(xml_function_tag_filter, streaming=True),
+            **_tts_runtime_kwargs(xml_function_tag_filter, audio_config),
         )
     elif user_config.tts.provider == ServiceProviders.CAMB.value:
         from pipecat.services.camb.tts import CambTTSService
@@ -680,7 +687,7 @@ def create_tts_service(
             api_key=user_config.tts.api_key,
             voice_id=voice_id,
             model=user_config.tts.model,
-            **_tts_runtime_kwargs(xml_function_tag_filter),
+            **_tts_runtime_kwargs(xml_function_tag_filter, audio_config),
         )
         # Set language directly as BCP-47 code (bypasses Language enum conversion)
         tts._settings.language = language
@@ -695,7 +702,7 @@ def create_tts_service(
                 voice=user_config.tts.voice,
                 speed=user_config.tts.speed,
             ),
-            **_tts_runtime_kwargs(xml_function_tag_filter),
+            **_tts_runtime_kwargs(xml_function_tag_filter, audio_config),
         )
     elif user_config.tts.provider == ServiceProviders.RIME.value:
         speed = getattr(user_config.tts, "speed", None)
@@ -718,7 +725,7 @@ def create_tts_service(
         return RimeTTSService(
             api_key=user_config.tts.api_key,
             settings=RimeTTSSettings(**settings_kwargs),
-            **_tts_runtime_kwargs(xml_function_tag_filter, streaming=True),
+            **_tts_runtime_kwargs(xml_function_tag_filter, audio_config),
         )
     elif user_config.tts.provider == ServiceProviders.SARVAM.value:
         # Map Sarvam language code to pipecat Language enum for TTS
@@ -752,7 +759,7 @@ def create_tts_service(
         return SarvamTTSService(
             api_key=user_config.tts.api_key,
             settings=SarvamTTSSettings(**settings_kwargs),
-            **_tts_runtime_kwargs(xml_function_tag_filter),
+            **_tts_runtime_kwargs(xml_function_tag_filter, audio_config),
         )
     elif user_config.tts.provider == ServiceProviders.MINIMAX.value:
         group_id = getattr(user_config.tts, "group_id", None)
@@ -785,7 +792,7 @@ def create_tts_service(
                 voice=voice,
                 speed=speed,
             ),
-            **_tts_runtime_kwargs(xml_function_tag_filter),
+            **_tts_runtime_kwargs(xml_function_tag_filter, audio_config),
         )
     elif user_config.tts.provider == ServiceProviders.AZURE_SPEECH.value:
         region = getattr(user_config.tts, "region", None) or "eastus"
@@ -804,7 +811,7 @@ def create_tts_service(
             api_key=user_config.tts.api_key,
             region=region,
             settings=AzureTTSSettings(**settings_kwargs),
-            **_tts_runtime_kwargs(xml_function_tag_filter),
+            **_tts_runtime_kwargs(xml_function_tag_filter, audio_config),
         )
     elif user_config.tts.provider == ServiceProviders.SMALLEST.value:
         language_code = getattr(user_config.tts, "language", None) or "en"
@@ -824,7 +831,7 @@ def create_tts_service(
         return SmallestTTSService(
             api_key=user_config.tts.api_key,
             settings=settings_kwargs,
-            **_tts_runtime_kwargs(xml_function_tag_filter, streaming=True),
+            **_tts_runtime_kwargs(xml_function_tag_filter, audio_config),
         )
     elif user_config.tts.provider == ServiceProviders.XAI.value:
         voice = getattr(user_config.tts, "voice", None) or "eve"
@@ -842,24 +849,22 @@ def create_tts_service(
                 voice=voice,
                 language=pipecat_language,
             ),
-            **_tts_runtime_kwargs(xml_function_tag_filter, streaming=True),
+            **_tts_runtime_kwargs(xml_function_tag_filter, audio_config),
         )
     elif user_config.tts.provider == ServiceProviders.MURF.value:
         voice = getattr(user_config.tts, "voice", None) or "Gordon"
         model = getattr(user_config.tts, "model", None) or "falcon-2"
         language = getattr(user_config.tts, "language", None)
-        # Falcon 2 is websocket streaming; Gen2 is HTTP and must stay
-        # sentence-aggregated or every token becomes a full HTTP round-trip.
-        murf_streaming = not str(model).lower().startswith("gen")
+        murf_rate = _tts_wire_sample_rate(audio_config)
         return MurfTTSService(
             api_key=user_config.tts.api_key,
             settings=MurfTTSSettings(
                 model=model,
                 voice=voice,
                 language=language,
-                murf_sample_rate=TTS_OUTPUT_SAMPLE_RATE,
+                murf_sample_rate=murf_rate,
             ),
-            **_tts_runtime_kwargs(xml_function_tag_filter, streaming=murf_streaming),
+            **_tts_runtime_kwargs(xml_function_tag_filter, audio_config),
         )
     else:
         raise HTTPException(

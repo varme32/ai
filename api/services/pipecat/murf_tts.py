@@ -123,7 +123,7 @@ class MurfTTSService(InterruptibleTTSService):
             sample_rate=effective_sample_rate,
             push_text_frames=True,
             text_aggregation_mode=kwargs.pop(
-                "text_aggregation_mode", TextAggregationMode.TOKEN
+                "text_aggregation_mode", TextAggregationMode.SENTENCE
             ),
             stop_frame_timeout_s=0.8,
             settings=default_settings,

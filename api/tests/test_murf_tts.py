@@ -2,14 +2,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from api.services.configuration.registry import ServiceProviders
-from api.services.pipecat.audio_config import TTS_OUTPUT_SAMPLE_RATE
 from api.services.pipecat.murf_tts import (
     _normalize_murf_model,
     _pcm_without_wav_header,
     _resolve_murf_locale,
 )
 from api.services.pipecat.service_factory import create_tts_service
-from pipecat.services.tts_service import TextAggregationMode
 
 
 def test_normalize_murf_model_accepts_legacy_identifiers():
@@ -32,7 +30,7 @@ def test_resolve_murf_locale_maps_short_codes():
     assert _resolve_murf_locale("hi-IN") == "hi-IN"
 
 
-def test_create_murf_tts_ignores_telephony_8khz_and_streams_tokens():
+def test_create_murf_tts_matches_telephony_wire_rate():
     user_config = SimpleNamespace(
         tts=SimpleNamespace(
             provider=ServiceProviders.MURF.value,
@@ -52,12 +50,12 @@ def test_create_murf_tts_ignores_telephony_8khz_and_streams_tokens():
         create_tts_service(user_config, audio_config)
 
     kwargs = mock_service.call_args.kwargs
-    assert kwargs["sample_rate"] == TTS_OUTPUT_SAMPLE_RATE
-    assert kwargs["settings"].murf_sample_rate == TTS_OUTPUT_SAMPLE_RATE
-    assert kwargs["text_aggregation_mode"] == TextAggregationMode.TOKEN
+    assert kwargs["sample_rate"] == 8000
+    assert kwargs["settings"].murf_sample_rate == 8000
+    assert "text_aggregation_mode" not in kwargs
 
 
-def test_create_murf_gen2_stays_sentence_aggregated():
+def test_create_murf_gen2_also_matches_wire_rate():
     user_config = SimpleNamespace(
         tts=SimpleNamespace(
             provider=ServiceProviders.MURF.value,
@@ -73,5 +71,5 @@ def test_create_murf_gen2_stays_sentence_aggregated():
         create_tts_service(user_config, audio_config)
 
     kwargs = mock_service.call_args.kwargs
-    assert "text_aggregation_mode" not in kwargs
-    assert kwargs["sample_rate"] == TTS_OUTPUT_SAMPLE_RATE
+    assert kwargs["sample_rate"] == 8000
+    assert kwargs["settings"].murf_sample_rate == 8000
