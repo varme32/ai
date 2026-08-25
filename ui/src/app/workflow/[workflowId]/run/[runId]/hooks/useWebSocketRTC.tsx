@@ -76,6 +76,8 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
     const audioRef = useRef<HTMLAudioElement>(null);
     const pcRef = useRef<RTCPeerConnection | null>(null);
     const wsRef = useRef<WebSocket | null>(null);
+    const dataChannelRef = useRef<RTCDataChannel | null>(null);
+    const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const localStreamRef = useRef<MediaStream | null>(null);
     const timeStartRef = useRef<number | null>(null);
     const onNodeTransitionRef = useRef(onNodeTransition);
@@ -183,6 +185,16 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
         if (iceTimeoutRef.current) {
             clearTimeout(iceTimeoutRef.current);
             iceTimeoutRef.current = null;
+        }
+
+        // Stop the ping interval before closing everything
+        if (pingIntervalRef.current) {
+            clearInterval(pingIntervalRef.current);
+            pingIntervalRef.current = null;
+        }
+        if (dataChannelRef.current) {
+            try { dataChannelRef.current.close(); } catch (_) {}
+            dataChannelRef.current = null;
         }
 
         gracefulDisconnectRef.current = graceful;
@@ -644,6 +656,45 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
         }
 
         try {
+            // Create the data channel BEFORE createOffer so it appears in the SDP.
+            // The server's SmallWebRTCConnection listens for 'ondatachannel' and uses
+            // it for pipeline heartbeats and ping-pong keepalive. Without it the
+            // server pipeline stalls within ~30 s.
+            if (!dataChannelRef.current) {
+                const dc = pc.createDataChannel('pipecat-rtvi', { ordered: true });
+                dataChannelRef.current = dc;
+
+                dc.onopen = () => {
+                    logger.info('Data channel opened');
+                    // Send periodic pings so the server detects live connection.
+                    // The server acks "ping" messages to track last-received time.
+                    pingIntervalRef.current = setInterval(() => {
+                        if (dc.readyState === 'open') {
+                            dc.send('ping');
+                        } else {
+                            if (pingIntervalRef.current) {
+                                clearInterval(pingIntervalRef.current);
+                                pingIntervalRef.current = null;
+                            }
+                        }
+                    }, 5000);
+                };
+
+                dc.onclose = () => {
+                    logger.info('Data channel closed');
+                    if (pingIntervalRef.current) {
+                        clearInterval(pingIntervalRef.current);
+                        pingIntervalRef.current = null;
+                    }
+                };
+
+                dc.onmessage = (event) => {
+                    logger.debug(`Data channel message: ${event.data}`);
+                };
+
+                logger.info('Created data channel: pipecat-rtvi');
+            }
+
             // Create offer
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
@@ -849,6 +900,14 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
             if (iceTimeoutRef.current) {
                 clearTimeout(iceTimeoutRef.current);
                 iceTimeoutRef.current = null;
+            }
+            if (pingIntervalRef.current) {
+                clearInterval(pingIntervalRef.current);
+                pingIntervalRef.current = null;
+            }
+            if (dataChannelRef.current) {
+                try { dataChannelRef.current.close(); } catch (_) {}
+                dataChannelRef.current = null;
             }
             stopLocalStream();
             if (wsRef.current) {
