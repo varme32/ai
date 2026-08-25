@@ -902,7 +902,7 @@ async def _run_pipeline_impl(
         if voicemail_config.get("use_workflow_llm", True):
             voicemail_llm = create_llm_service(
                 user_config,
-                correlation_id=mps_correlation_id,
+                correlation_id=None,
             )
         else:
             voicemail_llm = create_llm_service_from_provider(
