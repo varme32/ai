@@ -27,7 +27,7 @@ from pipecat.frames.frames import (
     TTSStoppedFrame,
 )
 from pipecat.services.settings import NOT_GIVEN, TTSSettings, _NotGiven
-from pipecat.services.tts_service import InterruptibleTTSService
+from pipecat.services.tts_service import InterruptibleTTSService, TextAggregationMode
 from pipecat.utils.tracing.service_decorators import traced_tts
 
 
@@ -112,6 +112,7 @@ class MurfTTSService(InterruptibleTTSService):
             pause_frame_processing=True,
             sample_rate=effective_sample_rate,
             push_text_frames=True,
+            text_aggregation_mode=TextAggregationMode.SENTENCE,
             settings=default_settings,
             **kwargs,
         )
@@ -121,6 +122,7 @@ class MurfTTSService(InterruptibleTTSService):
         self._receive_task = None
         self._keepalive_task = None
         self._use_http = False
+        self._http_session: aiohttp.ClientSession | None = None
 
     def can_generate_metrics(self) -> bool:
         return True
@@ -167,14 +169,24 @@ class MurfTTSService(InterruptibleTTSService):
 
     async def start(self, frame: StartFrame):
         await super().start(frame)
+        if not self._http_session or self._http_session.closed:
+            self._http_session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=10, connect=3)
+            )
         await self._connect()
 
     async def stop(self, frame: EndFrame):
         await super().stop(frame)
+        if self._http_session and not self._http_session.closed:
+            await self._http_session.close()
+            self._http_session = None
         await self._disconnect()
 
     async def cancel(self, frame: CancelFrame):
         await super().cancel(frame)
+        if self._http_session and not self._http_session.closed:
+            await self._http_session.close()
+            self._http_session = None
         await self._disconnect()
 
     async def _update_settings(self, delta: TTSSettings) -> dict[str, Any]:
@@ -332,38 +344,48 @@ class MurfTTSService(InterruptibleTTSService):
         await self.start_ttfb_metrics()
         await self.start_tts_usage_metrics(text)
 
+        session = self._http_session
+        close_session = False
+        if not session or session.closed:
+            session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=10, connect=3)
+            )
+            close_session = True
+
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=data) as resp:
-                    if resp.status != 200:
-                        err_body = await resp.text()
-                        logger.error(f"Murf HTTP streaming returned {resp.status}: {err_body}")
-                        yield ErrorFrame(error=f"Murf HTTP TTS error: {err_body[:200]}")
-                        yield TTSStoppedFrame(context_id=context_id)
-                        await self.stop_all_metrics()
-                        return
-
-                    await self.stop_ttfb_metrics()
-                    chunk_size = 2048
-                    while True:
-                        chunk = await resp.content.read(chunk_size)
-                        if not chunk:
-                            break
-                        frame = TTSAudioRawFrame(
-                            audio=chunk,
-                            sample_rate=self.sample_rate,
-                            num_channels=1,
-                            context_id=context_id,
-                        )
-                        yield frame
-
-                    await self.stop_all_metrics()
+            async with session.post(url, headers=headers, json=data) as resp:
+                if resp.status != 200:
+                    err_body = await resp.text()
+                    logger.error(f"Murf HTTP streaming returned {resp.status}: {err_body}")
+                    yield ErrorFrame(error=f"Murf HTTP TTS error: {err_body[:200]}")
                     yield TTSStoppedFrame(context_id=context_id)
+                    await self.stop_all_metrics()
+                    return
+
+                await self.stop_ttfb_metrics()
+                chunk_size = 1024
+                while True:
+                    chunk = await resp.content.read(chunk_size)
+                    if not chunk:
+                        break
+                    frame = TTSAudioRawFrame(
+                        audio=chunk,
+                        sample_rate=self.sample_rate,
+                        num_channels=1,
+                        context_id=context_id,
+                    )
+                    yield frame
+
+                await self.stop_all_metrics()
+                yield TTSStoppedFrame(context_id=context_id)
         except Exception as e:
             logger.error(f"Murf HTTP streaming exception: {e}")
             yield ErrorFrame(error=f"Murf HTTP TTS error: {e}")
             yield TTSStoppedFrame(context_id=context_id)
             await self.stop_all_metrics()
+        finally:
+            if close_session and session and not session.closed:
+                await session.close()
 
     @traced_tts
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame | None, None]:
