@@ -84,20 +84,21 @@ def build_turn_uris(
         tls_port = TURN_TLS_PORT if tls_port is None else tls_port
 
     uris: List[str] = []
-    if tls_port:
-        uris.append(f"turn:{host}:{tls_port}?transport=tcp")
-        uris.extend(
-            [
-                f"turns:{host}:{tls_port}?transport=tcp",
-                f"turns:{host}:{tls_port}",
-            ]
-        )
     uris.extend(
         [
             f"turn:{host}:{port}?transport=tcp",
             f"turn:{host}:{port}",
         ]
     )
+    if tls_port:
+        uris.extend(
+            [
+                f"turns:{host}:{tls_port}?transport=tcp",
+                f"turns:{host}:{tls_port}",
+            ]
+        )
+        if tls_port == 443:
+            uris.append(f"turn:{host}:{tls_port}?transport=tcp")
     return uris
 
 
