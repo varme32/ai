@@ -28,6 +28,42 @@ from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 from pipecat.utils.enums import EndTaskReason
 
+WEBRTC_AUDIO_READY_TIMEOUT_S = 8.0
+
+
+async def wait_until_webrtc_can_send_audio(
+    transport, timeout_s: float = WEBRTC_AUDIO_READY_TIMEOUT_S
+) -> None:
+    """Hold the greeting until WebRTC can actually send audio.
+
+    Phone/Exotel transports are already sending media when the pipeline
+    starts, so this is a no-op there. Browser tests fire
+    ``on_client_connected`` while ICE is still connecting; speaking then
+    causes write failures and 0.5s gaps (half-word, pause, repeat).
+    """
+    client = getattr(transport, "_client", None)
+    # SmallWebRTCClient always has `_audio_output_track`. Exotel/Twilio
+    # FastAPIWebsocketClient has `_can_send` but not that track — skip so
+    # phone greetings are not delayed.
+    if client is None or not callable(getattr(client, "_can_send", None)):
+        return
+    if not hasattr(client, "_audio_output_track"):
+        return
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    while loop.time() < deadline:
+        try:
+            ready = client._can_send() and getattr(client, "_audio_output_track", None)
+        except Exception:
+            ready = False
+        if ready:
+            logger.debug("WebRTC audio path ready; starting greeting")
+            return
+        await asyncio.sleep(0.05)
+    logger.warning(
+        f"WebRTC audio path not ready after {timeout_s:.1f}s; starting greeting anyway"
+    )
+
 
 def _start_opening_needs_fetch_context(engine: PipecatEngine) -> bool:
     """True when the start greeting/prompt still has unresolved template vars."""
@@ -164,6 +200,8 @@ def register_event_handlers(
             and not ready_state["initial_response_triggered"]
         ):
             ready_state["initial_response_triggered"] = True
+
+            await wait_until_webrtc_can_send_audio(transport)
 
             asyncio.create_task(
                 _capture_call_event(
