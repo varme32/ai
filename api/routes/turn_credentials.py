@@ -74,13 +74,18 @@ def build_turn_uris(
     a plain TCP ALLOCATE.
     """
     host = host or TURN_HOST
-    port = TURN_PORT if port is None else port
-    tls_port = TURN_TLS_PORT if tls_port is None else tls_port
+    is_metered = bool(host and "metered.ca" in host.lower())
+
+    if is_metered:
+        port = port if port is not None and port != 3478 else 80
+        tls_port = tls_port if tls_port is not None and tls_port != 5349 else 443
+    else:
+        port = TURN_PORT if port is None else port
+        tls_port = TURN_TLS_PORT if tls_port is None else tls_port
 
     uris: List[str] = []
     if tls_port:
-        if tls_port == 443:
-            uris.append(f"turn:{host}:{tls_port}?transport=tcp")
+        uris.append(f"turn:{host}:{tls_port}?transport=tcp")
         uris.extend(
             [
                 f"turns:{host}:{tls_port}?transport=tcp",
