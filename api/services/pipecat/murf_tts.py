@@ -127,6 +127,7 @@ class MurfTTSService(InterruptibleTTSService):
             "voice_id": voice_id,
             "voiceId": voice_id,
             "model": model,
+            "style": "Conversational",
             "sample_rate": self._settings.murf_sample_rate or 24000,
             "sampleRate": self._settings.murf_sample_rate or 24000,
             "format": "PCM",
@@ -134,7 +135,9 @@ class MurfTTSService(InterruptibleTTSService):
             "channelType": "MONO",
         }
         if self._settings.language and self._settings.language is not NOT_GIVEN:
-            voice_config["locale"] = str(self._settings.language)
+            lang_str = str(self._settings.language)
+            voice_config["locale"] = lang_str
+            voice_config["multiNativeLocale"] = lang_str
 
         return {
             "voice_config": voice_config
