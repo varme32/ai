@@ -281,7 +281,7 @@ class MurfTTSService(InterruptibleTTSService):
                 logger.debug(f"Murf TTS: unhandled message: {msg}")
 
     async def _stream_http_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame | None, None]:
-        url = "https://global.api.murf.ai/v1/speech/stream"
+        url = "https://api.murf.ai/v1/speech/stream"
         headers = {
             "api-key": self._api_key,
             "Content-Type": "application/json",
@@ -289,7 +289,7 @@ class MurfTTSService(InterruptibleTTSService):
         voice_id = self._settings.voice or MURF_DEFAULT_VOICE
         model_str = str(self._settings.model or "GEN2").upper()
         if "FALCON" in model_str:
-            model = "FALCON"
+            model = "Falcon-2"
         else:
             model = "GEN2"
 
