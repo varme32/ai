@@ -48,6 +48,24 @@ class MurfTTSSettings(TTSSettings):
     murf_sample_rate: int = 24000
 
 
+def _resolve_murf_locale(lang: Any) -> str:
+    if not lang or lang is NOT_GIVEN:
+        return "en-US"
+    s = str(lang).strip()
+    mapping = {
+        "te": "te-IN",
+        "hi": "hi-IN",
+        "ta": "ta-IN",
+        "kn": "kn-IN",
+        "bn": "bn-IN",
+        "mr": "mr-IN",
+        "en": "en-US",
+    }
+    if s.lower() in mapping:
+        return mapping[s.lower()]
+    return s
+
+
 class MurfTTSService(InterruptibleTTSService):
     """Murf AI real-time TTS service using WebSocket streaming (Falcon 2).
 
@@ -113,7 +131,7 @@ class MurfTTSService(InterruptibleTTSService):
     def language_to_service_language(self, language) -> str | None:
         if language is None:
             return None
-        return str(language).split("-")[0]
+        return _resolve_murf_locale(language)
 
     def _build_session_config(self) -> dict:
         voice_id = self._settings.voice
@@ -125,6 +143,7 @@ class MurfTTSService(InterruptibleTTSService):
         elif str(model).lower().startswith("falcon"):
             model = "FALCON"
 
+        locale_str = _resolve_murf_locale(self._settings.language)
         voice_config = {
             "voice_id": voice_id,
             "voiceId": voice_id,
@@ -135,11 +154,9 @@ class MurfTTSService(InterruptibleTTSService):
             "format": "PCM",
             "channel_type": "MONO",
             "channelType": "MONO",
+            "locale": locale_str,
+            "multiNativeLocale": locale_str,
         }
-        if self._settings.language and self._settings.language is not NOT_GIVEN:
-            lang_str = str(self._settings.language)
-            voice_config["locale"] = lang_str
-            voice_config["multiNativeLocale"] = lang_str
 
         return {
             "voice_config": voice_config
@@ -308,10 +325,9 @@ class MurfTTSService(InterruptibleTTSService):
             "sampleRate": self.sample_rate or 24000,
             "channelType": "MONO",
         }
-        if self._settings.language and self._settings.language is not NOT_GIVEN:
-            lang_str = str(self._settings.language)
-            data["locale"] = lang_str
-            data["multiNativeLocale"] = lang_str
+        locale_str = _resolve_murf_locale(self._settings.language)
+        data["locale"] = locale_str
+        data["multiNativeLocale"] = locale_str
 
         await self.start_ttfb_metrics()
         await self.start_tts_usage_metrics(text)
