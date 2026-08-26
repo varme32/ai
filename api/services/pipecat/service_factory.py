@@ -77,6 +77,7 @@ from pipecat.services.openrouter.llm import OpenRouterLLMService, OpenRouterLLMS
 from pipecat.services.rime.tts import RimeTTSService, RimeTTSSettings
 from pipecat.services.sarvam.llm import SarvamLLMService, SarvamLLMSettings
 from pipecat.services.sarvam.stt import SarvamSTTService, SarvamSTTSettings
+from api.services.pipecat.sarvam_stt_override import DograhSarvamSTTService
 from pipecat.services.sarvam.tts import SarvamTTSService, SarvamTTSSettings
 from pipecat.services.smallest.stt import SmallestSTTService, SmallestSTTSettings
 from pipecat.services.smallest.tts import SmallestTTSService, SmallestTTSSettings
@@ -408,7 +409,7 @@ def create_stt_service(
         else:
             # Unmapped BCP-47 codes pass through; Sarvam accepts them per https://docs.sarvam.ai/api-reference-docs/speech-to-text/transcribe
             pipecat_language = language
-        return SarvamSTTService(
+        return DograhSarvamSTTService(
             api_key=user_config.stt.api_key,
             settings=SarvamSTTSettings(
                 model=user_config.stt.model,

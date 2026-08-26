@@ -28,19 +28,6 @@ RUN --mount=type=bind,source=api/requirements.txt,target=/tmp/req.txt \
     uv pip install -r /tmp/req.txt
 
 # Layer 2: pipecat deps. Cache invalidates when pipecat source changes.
-#
-# Two install paths depending on whether the pipecat git submodule was
-# initialized before the build:
-#
-#   Path A (local source) — used when pipecat/pyproject.toml is present.
-#     Works for: local dev builds and GitHub Actions with GH_PAT configured.
-#
-#   Path B (git URL)      — used as fallback when pipecat/ is empty.
-#     Works for: Render and other CI systems that do not initialize git
-#     submodules. Requires PIPECAT_GIT_TOKEN (a PAT with read access to
-#     dograh-hq/pipecat) and PIPECAT_COMMIT (the exact submodule commit).
-#     Set these as Docker Build Args in Render → Service → Environment.
-#
 # After installing pipecat, two hardening tweaks:
 #   1. Swap opencv-python (pulled by pipecat[webrtc]) for opencv-python-headless.
 #      The non-headless build links against X11/Qt (libxcb*); without those
@@ -48,28 +35,13 @@ RUN --mount=type=bind,source=api/requirements.txt,target=/tmp/req.txt \
 #   2. Pre-download NLTK's punkt_tab tokenizer so pipecat's text processing
 #      doesn't hit the network on first agent run. NLTK auto-finds it under
 #      sys.prefix/nltk_data, so it travels with the venv on COPY.
-ARG PIPECAT_GIT_TOKEN=""
-ARG PIPECAT_COMMIT=b108c31f35068a24b4623419fd51e181aafabda6
-COPY pipecat /tmp/pipecat
-RUN --mount=type=cache,target=/root/.cache/uv \
-    PIPECAT_EXTRAS="cartesia,deepgram,openai,elevenlabs,groq,google,azure,sarvam,soundfile,silero,webrtc,speechmatics,openrouter,camb,mcp,inworld,smallest" \
- && if [ -f /tmp/pipecat/pyproject.toml ]; then \
-        echo "Installing pipecat from local source (/tmp/pipecat)..." \
-     && uv pip install "/tmp/pipecat[${PIPECAT_EXTRAS}]" ; \
-    elif [ -n "${PIPECAT_GIT_TOKEN}" ]; then \
-        echo "pipecat submodule not initialized — installing from git URL (commit: ${PIPECAT_COMMIT})..." \
-     && uv pip install \
-            "pipecat-ai[${PIPECAT_EXTRAS}] @ git+https://x-access-token:${PIPECAT_GIT_TOKEN}@github.com/dograh-hq/pipecat.git@${PIPECAT_COMMIT}" ; \
-    else \
-        echo "ERROR: pipecat/pyproject.toml not found and PIPECAT_GIT_TOKEN build arg is not set." >&2 \
-     && echo "  For Render: add PIPECAT_GIT_TOKEN and PIPECAT_COMMIT as Docker Build Args in the service settings." >&2 \
-     && echo "  For GitHub Actions: ensure the pipecat submodule is initialized (see docker-image.yml)." >&2 \
-     && exit 1 ; \
-    fi \
+RUN --mount=type=bind,source=pipecat,target=/tmp/pipecat,rw \
+    --mount=type=cache,target=/root/.cache/uv \
+    uv pip install '/tmp/pipecat[cartesia,deepgram,openai,elevenlabs,groq,google,azure,sarvam,soundfile,silero,webrtc,speechmatics,openrouter,camb,mcp,inworld,smallest]' \
  && uv pip uninstall opencv-python \
  && uv pip install opencv-python-headless \
- && python -c "import nltk; nltk.download('punkt_tab', download_dir='/opt/venv/nltk_data', quiet=True)" \
- && rm -rf /tmp/pipecat
+ && python -c "import nltk; nltk.download('punkt_tab', download_dir='/opt/venv/nltk_data', quiet=True)"
+
 
 # Strip cache files, test/example dirs, and type stubs from the venv
 RUN find /opt/venv -type f -name '*.pyc' -delete && \
