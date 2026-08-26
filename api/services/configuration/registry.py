@@ -1326,25 +1326,7 @@ class SmallestAITTSConfiguration(BaseTTSConfiguration):
 
 
 MURF_TTS_MODELS = ["falcon-2", "GEN2"]
-MURF_TTS_VOICES = [
-    "en-US-gordon",
-    "en-US-marcus",
-    "en-US-natalie",
-    "en-US-alicia",
-    "en-US-terrell",
-    "en-US-samantha",
-    "en-US-dylan",
-    "en-US-trevor",
-    "en-US-angela",
-    "en-US-wayne",
-    "en-US-scarlett",
-    "en-UK-hazel",
-    "hi-IN-anusha",
-    "hi-IN-anisha",
-    "hi-IN-aarav",
-    "hi-IN-kabir",
-    "hi-IN-ananya",
-]
+MURF_TTS_VOICES: list[str] = []
 
 
 @register_tts
@@ -1357,15 +1339,12 @@ class MurfTTSConfiguration(BaseTTSConfiguration):
         json_schema_extra={"examples": MURF_TTS_MODELS},
     )
     voice: str = Field(
-        default="Gordon",
+        default="",
         description="Murf AI voice ID.",
-        json_schema_extra={
-            "examples": MURF_TTS_VOICES,
-            "allow_custom_input": True,
-        },
+        json_schema_extra={"allow_custom_input": True},
     )
     language: str = Field(
-        default="en",
+        default="",
         description="ISO 639-1 language code for synthesis (e.g. 'en', 'hi').",
         json_schema_extra={"allow_custom_input": True},
     )

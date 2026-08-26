@@ -49,36 +49,11 @@ class MurfTTSSettings(TTSSettings):
     murf_sample_rate: int = 24000
 
 
-MURF_SHORT_VOICE_MAPPING = {
-    "gordon": "en-US-gordon",
-    "marcus": "en-US-marcus",
-    "natalie": "en-US-natalie",
-    "alicia": "en-US-alicia",
-    "terrell": "en-US-terrell",
-    "samantha": "en-US-samantha",
-    "dylan": "en-US-dylan",
-    "trevor": "en-US-trevor",
-    "angela": "en-US-angela",
-    "wayne": "en-US-wayne",
-    "scarlett": "en-US-scarlett",
-    "anusha": "hi-IN-anusha",
-    "anisha": "hi-IN-anisha",
-    "aarav": "hi-IN-aarav",
-    "kabir": "hi-IN-kabir",
-    "ananya": "hi-IN-ananya",
-    "hazel": "en-UK-hazel",
-}
-
-
 def _normalize_murf_voice(voice_id: Any) -> str:
-    """Normalize short display names to full Murf voice IDs (e.g. 'Alicia' -> 'en-US-alicia')."""
+    """Return the exact voice ID selected from the Murf API."""
     if not voice_id or voice_id is NOT_GIVEN:
-        return "en-US-gordon"
-    s = str(voice_id).strip()
-    s_lower = s.lower()
-    if s_lower in MURF_SHORT_VOICE_MAPPING:
-        return MURF_SHORT_VOICE_MAPPING[s_lower]
-    return s
+        return MURF_DEFAULT_VOICE
+    return str(voice_id).strip()
 
 
 def _resolve_murf_locale(lang: Any, voice_id: str | None = None) -> str:

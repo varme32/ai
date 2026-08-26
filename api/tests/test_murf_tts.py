@@ -19,12 +19,11 @@ def test_normalize_murf_model_accepts_legacy_identifiers():
     assert _normalize_murf_model(None) == "falcon-2"
 
 
-def test_normalize_murf_voice_maps_short_names():
-    assert _normalize_murf_voice("Alicia") == "en-US-alicia"
-    assert _normalize_murf_voice("natalie") == "en-US-natalie"
-    assert _normalize_murf_voice("aarav") == "hi-IN-aarav"
-    assert _normalize_murf_voice("en-US-marcus") == "en-US-marcus"
-    assert _normalize_murf_voice(None) == "en-US-gordon"
+def test_normalize_murf_voice_accepts_api_voice_ids():
+    assert _normalize_murf_voice("en-US-alicia") == "en-US-alicia"
+    assert _normalize_murf_voice("hi-IN-aarav") == "hi-IN-aarav"
+    assert _normalize_murf_voice("te-IN-ananya") == "te-IN-ananya"
+    assert _normalize_murf_voice(None) == "Gordon"
 
 
 def test_pcm_without_wav_header_strips_riff():
