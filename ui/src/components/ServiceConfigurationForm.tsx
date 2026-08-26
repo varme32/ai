@@ -697,8 +697,8 @@ export function ServiceConfigurationForm({
             watch(`${service}_model`) as string | undefined,
         );
 
-        if (service === "tts" && field === "voice" && !actualSchema?.allow_custom_input) {
-            if (!dropdownOptions) {
+        if (service === "tts" && field === "voice") {
+            if (!dropdownOptions || dropdownOptions.length === 0) {
                 return (
                     <VoiceSelector
                         provider={serviceProviders.tts}
@@ -707,6 +707,7 @@ export function ServiceConfigurationForm({
                             setValue(`${service}_${field}`, voiceId, { shouldDirty: true });
                         }}
                         model={watch("tts_model") as string || undefined}
+                        allowManualInput={true}
                     />
                 );
             }
