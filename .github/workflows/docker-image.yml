@@ -91,8 +91,29 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          # Do NOT pass submodules: here — we handle it explicitly below
+          # so we can inject credentials for dograh-hq/pipecat (private repo).
           token: ${{ secrets.GH_PAT }}
+
+      - name: Initialize pipecat submodule
+        # actions/checkout submodules: recursive uses GITHUB_TOKEN which only
+        # has read access to the current repo. dograh-hq/pipecat is a separate
+        # private repo that requires an org-level PAT (GH_PAT secret).
+        # We rewrite the HTTPS URL so every git submodule fetch uses the PAT.
+        run: |
+          git config --global \
+            url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/".insteadOf \
+            "https://github.com/"
+          git submodule update --init --recursive
+
+      - name: Verify pipecat submodule is populated
+        run: |
+          if [ ! -f pipecat/pyproject.toml ]; then
+            echo "ERROR: pipecat/pyproject.toml not found after submodule init."
+            echo "Check that GH_PAT secret has read access to dograh-hq/pipecat."
+            exit 1
+          fi
+          echo "pipecat/pyproject.toml found ($(wc -c < pipecat/pyproject.toml) bytes) ✓"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
