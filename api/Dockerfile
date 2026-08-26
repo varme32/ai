@@ -28,6 +28,10 @@ RUN --mount=type=bind,source=api/requirements.txt,target=/tmp/req.txt \
     uv pip install -r /tmp/req.txt
 
 # Layer 2: pipecat deps. Cache invalidates when pipecat source changes.
+# We COPY pipecat explicitly rather than using --mount=type=bind because
+# bind mounts source from the build-context snapshot which can be empty
+# when the git submodule is checked out shallowly (e.g. GitHub Actions
+# `submodules: true`). COPY forces the files into the layer deterministically.
 # After installing pipecat, two hardening tweaks:
 #   1. Swap opencv-python (pulled by pipecat[webrtc]) for opencv-python-headless.
 #      The non-headless build links against X11/Qt (libxcb*); without those
@@ -35,12 +39,13 @@ RUN --mount=type=bind,source=api/requirements.txt,target=/tmp/req.txt \
 #   2. Pre-download NLTK's punkt_tab tokenizer so pipecat's text processing
 #      doesn't hit the network on first agent run. NLTK auto-finds it under
 #      sys.prefix/nltk_data, so it travels with the venv on COPY.
-RUN --mount=type=bind,source=pipecat,target=/tmp/pipecat,rw \
-    --mount=type=cache,target=/root/.cache/uv \
+COPY pipecat /tmp/pipecat
+RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install '/tmp/pipecat[cartesia,deepgram,openai,elevenlabs,groq,google,azure,sarvam,soundfile,silero,webrtc,speechmatics,openrouter,camb,mcp,inworld,smallest]' \
  && uv pip uninstall opencv-python \
  && uv pip install opencv-python-headless \
- && python -c "import nltk; nltk.download('punkt_tab', download_dir='/opt/venv/nltk_data', quiet=True)"
+ && python -c "import nltk; nltk.download('punkt_tab', download_dir='/opt/venv/nltk_data', quiet=True)" \
+ && rm -rf /tmp/pipecat
 
 # Strip cache files, test/example dirs, and type stubs from the venv
 RUN find /opt/venv -type f -name '*.pyc' -delete && \
