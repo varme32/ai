@@ -74,6 +74,7 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
             cartesia: "cartesia",
             dograh: "dograh",
             rime: "rime",
+            murf: "murf",
         };
         return providerMap[providerName.toLowerCase()] || null;
     }, []);

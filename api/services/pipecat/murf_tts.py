@@ -49,22 +49,64 @@ class MurfTTSSettings(TTSSettings):
     murf_sample_rate: int = 24000
 
 
-def _resolve_murf_locale(lang: Any) -> str:
-    if not lang or lang is NOT_GIVEN:
-        return "en-US"
-    s = str(lang).strip()
-    mapping = {
-        "te": "te-IN",
-        "hi": "hi-IN",
-        "ta": "ta-IN",
-        "kn": "kn-IN",
-        "bn": "bn-IN",
-        "mr": "mr-IN",
-        "en": "en-US",
-    }
-    if s.lower() in mapping:
-        return mapping[s.lower()]
+MURF_SHORT_VOICE_MAPPING = {
+    "gordon": "en-US-gordon",
+    "marcus": "en-US-marcus",
+    "natalie": "en-US-natalie",
+    "alicia": "en-US-alicia",
+    "terrell": "en-US-terrell",
+    "samantha": "en-US-samantha",
+    "dylan": "en-US-dylan",
+    "trevor": "en-US-trevor",
+    "angela": "en-US-angela",
+    "wayne": "en-US-wayne",
+    "scarlett": "en-US-scarlett",
+    "anusha": "hi-IN-anusha",
+    "anisha": "hi-IN-anisha",
+    "aarav": "hi-IN-aarav",
+    "kabir": "hi-IN-kabir",
+    "ananya": "hi-IN-ananya",
+    "hazel": "en-UK-hazel",
+}
+
+
+def _normalize_murf_voice(voice_id: Any) -> str:
+    """Normalize short display names to full Murf voice IDs (e.g. 'Alicia' -> 'en-US-alicia')."""
+    if not voice_id or voice_id is NOT_GIVEN:
+        return "en-US-gordon"
+    s = str(voice_id).strip()
+    s_lower = s.lower()
+    if s_lower in MURF_SHORT_VOICE_MAPPING:
+        return MURF_SHORT_VOICE_MAPPING[s_lower]
     return s
+
+
+def _resolve_murf_locale(lang: Any, voice_id: str | None = None) -> str:
+    if lang and lang is not NOT_GIVEN:
+        s = str(lang).strip()
+        mapping = {
+            "te": "te-IN",
+            "hi": "hi-IN",
+            "ta": "ta-IN",
+            "kn": "kn-IN",
+            "bn": "bn-IN",
+            "mr": "mr-IN",
+            "en": "en-US",
+            "pa": "pa-IN",
+            "gu": "gu-IN",
+            "ml": "ml-IN",
+        }
+        if s.lower() in mapping:
+            return mapping[s.lower()]
+        return s
+
+    # Infer locale from voice_id prefix (e.g. "hi-IN-aarav" -> "hi-IN", "en-US-natalie" -> "en-US")
+    if voice_id and "-" in voice_id:
+        parts = voice_id.split("-")
+        if len(parts) >= 3 and len(parts[0]) == 2 and len(parts[1]) == 2:
+            return f"{parts[0]}-{parts[1]}"
+
+    return "en-US"
 
 
 def _normalize_murf_model(model: Any) -> str:
@@ -164,9 +206,7 @@ class MurfTTSService(InterruptibleTTSService):
 
     def _murf_voice(self) -> str:
         voice_id = self._settings.voice
-        if voice_id is NOT_GIVEN or not voice_id:
-            return MURF_DEFAULT_VOICE
-        return str(voice_id)
+        return _normalize_murf_voice(voice_id)
 
     def _websocket_url(self) -> str:
         query = urlencode(
@@ -181,10 +221,11 @@ class MurfTTSService(InterruptibleTTSService):
         return f"{self._base_url}?{query}"
 
     def _build_session_config(self) -> dict:
-        locale_str = _resolve_murf_locale(self._settings.language)
+        voice = self._murf_voice()
+        locale_str = _resolve_murf_locale(self._settings.language, voice)
         return {
             "voice_config": {
-                "voiceId": self._murf_voice(),
+                "voiceId": voice,
                 "model": self._murf_model(),
                 "style": "Conversational",
                 "locale": locale_str,
@@ -362,17 +403,18 @@ class MurfTTSService(InterruptibleTTSService):
             "api-key": self._api_key,
             "Content-Type": "application/json",
         }
+        voice = self._murf_voice()
+        locale_str = _resolve_murf_locale(self._settings.language, voice)
         data = {
-            "voiceId": self._murf_voice(),
+            "voiceId": voice,
             "style": "Conversational",
             "text": text,
             "model": self._murf_model(),
             "format": "PCM",
             "sampleRate": self.sample_rate or MURF_DEFAULT_SAMPLE_RATE,
             "channelType": "MONO",
+            "locale": locale_str,
         }
-        locale_str = _resolve_murf_locale(self._settings.language)
-        data["locale"] = locale_str
 
         await self.start_ttfb_metrics()
         await self.start_tts_usage_metrics(text)

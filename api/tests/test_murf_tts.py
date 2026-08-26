@@ -4,6 +4,7 @@ from unittest.mock import patch
 from api.services.configuration.registry import ServiceProviders
 from api.services.pipecat.murf_tts import (
     _normalize_murf_model,
+    _normalize_murf_voice,
     _pcm_without_wav_header,
     _resolve_murf_locale,
 )
@@ -18,6 +19,14 @@ def test_normalize_murf_model_accepts_legacy_identifiers():
     assert _normalize_murf_model(None) == "falcon-2"
 
 
+def test_normalize_murf_voice_maps_short_names():
+    assert _normalize_murf_voice("Alicia") == "en-US-alicia"
+    assert _normalize_murf_voice("natalie") == "en-US-natalie"
+    assert _normalize_murf_voice("aarav") == "hi-IN-aarav"
+    assert _normalize_murf_voice("en-US-marcus") == "en-US-marcus"
+    assert _normalize_murf_voice(None) == "en-US-gordon"
+
+
 def test_pcm_without_wav_header_strips_riff():
     payload = b"RIFF" + b"\x00" * 40 + b"pcm-bytes"
     assert _pcm_without_wav_header(payload) == b"pcm-bytes"
@@ -28,6 +37,8 @@ def test_resolve_murf_locale_maps_short_codes():
     assert _resolve_murf_locale("te") == "te-IN"
     assert _resolve_murf_locale("en") == "en-US"
     assert _resolve_murf_locale("hi-IN") == "hi-IN"
+    assert _resolve_murf_locale(None, "hi-IN-aarav") == "hi-IN"
+    assert _resolve_murf_locale(None, "en-US-natalie") == "en-US"
 
 
 def test_create_murf_tts_matches_telephony_wire_rate():

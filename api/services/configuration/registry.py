@@ -1327,18 +1327,23 @@ class SmallestAITTSConfiguration(BaseTTSConfiguration):
 
 MURF_TTS_MODELS = ["falcon-2", "GEN2"]
 MURF_TTS_VOICES = [
-    "Anusha",
-    "Anisha",
-    "Gordon",
-    "Terrell",
-    "Marcus",
-    "Samantha",
-    "Alicia",
-    "Dylan",
-    "Trevor",
-    "Angela",
-    "Wayne",
-    "Scarlett",
+    "en-US-gordon",
+    "en-US-marcus",
+    "en-US-natalie",
+    "en-US-alicia",
+    "en-US-terrell",
+    "en-US-samantha",
+    "en-US-dylan",
+    "en-US-trevor",
+    "en-US-angela",
+    "en-US-wayne",
+    "en-US-scarlett",
+    "en-UK-hazel",
+    "hi-IN-anusha",
+    "hi-IN-anisha",
+    "hi-IN-aarav",
+    "hi-IN-kabir",
+    "hi-IN-ananya",
 ]
 
 
