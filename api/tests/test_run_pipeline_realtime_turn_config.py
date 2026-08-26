@@ -147,14 +147,11 @@ def test_non_realtime_default_uses_transcription_fallback_and_vad_for_standard_s
         uses_external_turns=False,
     )
 
-    # Default path: MinWordsUserTurnStartStrategy is the sole transcription gate.
-    # TranscriptionUserTurnStartStrategy is intentionally absent — it fires on
-    # any transcription frame independently, bypassing the word-count gate.
     assert len(strategies) == 2
-    assert isinstance(strategies[0], MinWordsUserTurnStartStrategy)
-    assert strategies[0]._min_words == DEFAULT_TURN_START_MIN_WORDS_TELEPHONY
+    assert isinstance(strategies[0], TranscriptionUserTurnStartStrategy)
+    assert strategies[0]._enable_interruptions is True
     assert isinstance(strategies[1], VADUserTurnStartStrategy)
-    assert strategies[1]._enable_interruptions is False
+    assert strategies[1]._enable_interruptions is True
 
 
 def test_non_realtime_can_use_min_words_start_strategy():

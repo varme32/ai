@@ -178,26 +178,14 @@ def _create_non_realtime_user_turn_start_strategies(
         # confirms a real turn.
         return [ExternalUserTurnStartStrategy(enable_interruptions=True)]
 
-    # On the default (non-explicit) path we use MinWordsUserTurnStartStrategy
-    # as the sole transcription-based gate. It counts words from TranscriptionFrames
-    # internally and requires min_words WHEN the bot is speaking (built-in
-    # behaviour: threshold auto-reduces to 1 when bot is silent).
-    #
-    # IMPORTANT: TranscriptionUserTurnStartStrategy must NOT be added here —
-    # it fires on *any* transcription frame independently, completely bypassing
-    # the word-count gate. Live call logs showed it triggering interruptions on
-    # Bengali/Malayalam hallucinations (e.g. "আচ্ছা।") that MinWords had already
-    # rejected. Having both strategies means MinWords can never gate anything.
-    #
-    # VAD tracks speaking state only and must not barge in on its own: phone
-    # echo of the bot looks like user speech to Silero and would cut TTS
-    # mid-sentence. Real interruptions fire from MinWordsUserTurnStartStrategy
-    # once the STT produces enough words.
+    # Default non-realtime turn start strategies:
+    # - TranscriptionUserTurnStartStrategy: triggers turn start on transcription frames
+    # - VADUserTurnStartStrategy: triggers instant barge-in with enable_interruptions=True
+    #   so active bot TTS audio playback and LLM stream are immediately cancelled
+    #   when the user starts speaking.
     return [
-        MinWordsUserTurnStartStrategy(
-            min_words=DEFAULT_TURN_START_MIN_WORDS_TELEPHONY
-        ),
-        VADUserTurnStartStrategy(enable_interruptions=False),
+        TranscriptionUserTurnStartStrategy(enable_interruptions=True),
+        VADUserTurnStartStrategy(enable_interruptions=True),
     ]
 
 
