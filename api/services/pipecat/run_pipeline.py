@@ -11,7 +11,9 @@ from api.enums import WorkflowRunMode
 from api.schemas.workflow_configurations import (
     DEFAULT_PROVISIONAL_VAD_PAUSE_SECS,
     DEFAULT_SMART_TURN_STOP_SECS,
+    DEFAULT_SPEECH_TIMEOUT_SECS,
     DEFAULT_TURN_START_MIN_WORDS,
+    DEFAULT_TURN_START_MIN_WORDS_TELEPHONY,
     DEFAULT_TURN_START_STRATEGY,
 )
 from api.services.call_concurrency import call_concurrency
@@ -176,11 +178,17 @@ def _create_non_realtime_user_turn_start_strategies(
         # confirms a real turn.
         return [ExternalUserTurnStartStrategy(enable_interruptions=True)]
 
-    # VAD tracks speaking state but must not barge in on its own. Phone
-    # echo of the bot looks like user speech to Silero and was cutting TTS
-    # mid-sentence (pause-then-play). Real interruptions still fire from
-    # TranscriptionUserTurnStartStrategy once STT produces words.
+    # On the default (non-explicit) path we apply a 2-word minimum gate in
+    # front of the transcription strategy. This prevents single-word STT
+    # hallucinations from phone line noise or PSTN echo (e.g. a stray "hello"
+    # or "hmm") from immediately being treated as a new user turn. A real
+    # utterance still fires the turn quickly once two words land.
+    # VAD tracks speaking state but must not barge in on its own: phone echo
+    # of the bot looks like user speech to Silero and would cut TTS mid-sentence.
     return [
+        MinWordsUserTurnStartStrategy(
+            min_words=DEFAULT_TURN_START_MIN_WORDS_TELEPHONY
+        ),
         TranscriptionUserTurnStartStrategy(),
         VADUserTurnStartStrategy(enable_interruptions=False),
     ]
@@ -206,7 +214,10 @@ def _create_non_realtime_user_turn_stop_strategies(
             )
         ]
 
-    return [SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.4)]
+    # 0.8 s silence threshold — raised from 0.4 s. The longer window prevents
+    # rapid identical utterances (e.g. "Hello … Hello") from being closed into
+    # separate turns and generating duplicate LLM responses on phone calls.
+    return [SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=DEFAULT_SPEECH_TIMEOUT_SECS)]
 
 
 def _create_realtime_user_turn_config(provider: str):

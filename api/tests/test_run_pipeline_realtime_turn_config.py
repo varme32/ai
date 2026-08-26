@@ -17,6 +17,10 @@ from pipecat.turns.user_stop import (
 )
 
 import api.services.pipecat.run_pipeline as run_pipeline_module
+from api.schemas.workflow_configurations import (
+    DEFAULT_SPEECH_TIMEOUT_SECS,
+    DEFAULT_TURN_START_MIN_WORDS_TELEPHONY,
+)
 from api.services.configuration.registry import ServiceProviders
 from api.services.pipecat.run_pipeline import (
     DEFAULT_PROVISIONAL_VAD_PAUSE_SECS,
@@ -143,10 +147,14 @@ def test_non_realtime_default_uses_transcription_fallback_and_vad_for_standard_s
         uses_external_turns=False,
     )
 
-    assert len(strategies) == 2
-    assert isinstance(strategies[0], TranscriptionUserTurnStartStrategy)
-    assert isinstance(strategies[1], VADUserTurnStartStrategy)
-    assert strategies[1]._enable_interruptions is False
+    # Default path now has a 2-word gate first to block single-word STT
+    # hallucinations from phone line noise.
+    assert len(strategies) == 3
+    assert isinstance(strategies[0], MinWordsUserTurnStartStrategy)
+    assert strategies[0]._min_words == DEFAULT_TURN_START_MIN_WORDS_TELEPHONY
+    assert isinstance(strategies[1], TranscriptionUserTurnStartStrategy)
+    assert isinstance(strategies[2], VADUserTurnStartStrategy)
+    assert strategies[2]._enable_interruptions is False
 
 
 def test_non_realtime_can_use_min_words_start_strategy():
@@ -244,7 +252,7 @@ def test_non_realtime_default_uses_speech_timeout_stop():
 
     assert len(strategies) == 1
     assert isinstance(strategies[0], SpeechTimeoutUserTurnStopStrategy)
-    assert strategies[0]._user_speech_timeout == 0.4
+    assert strategies[0]._user_speech_timeout == DEFAULT_SPEECH_TIMEOUT_SECS
 
 
 def test_non_realtime_can_use_turn_analyzer_stop_strategy(monkeypatch):

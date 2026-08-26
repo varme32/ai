@@ -286,7 +286,12 @@ def create_stt_service(
             settings=DeepgramSTTSettings(
                 language=language,
                 profanity_filter=False,
-                endpointing=50,
+                # 300 ms endpointing: minimum silence before Deepgram finalises
+                # a transcript. 50 ms (old value) was too aggressive for 8 kHz
+                # phone audio — line static constantly tripped it, fragmenting
+                # natural speech into micro-turns. 300 ms matches typical
+                # natural-speech pause expectations on PSTN calls.
+                endpointing=300,
                 model=user_config.stt.model,
                 keyterm=keyterms or [],
             ),
