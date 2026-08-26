@@ -12,18 +12,22 @@ DEFAULT_SMART_TURN_STOP_SECS = 2.0
 DEFAULT_TURN_START_STRATEGY = "default"
 DEFAULT_TURN_START_MIN_WORDS = 3
 # Minimum words required before triggering a user turn on the default
-# (non-explicit) strategy for telephony pipelines. A gate of 2 words
-# blocks single-word STT hallucinations from phone line noise while
-# still firing quickly for real utterances ("yes please", "I need …").
-DEFAULT_TURN_START_MIN_WORDS_TELEPHONY = 2
+# (non-explicit) strategy for telephony pipelines. A gate of 3 words:
+#   - blocks 1–2-word STT hallucinations from phone line noise and filler
+#     sounds ("ആ ഉം", "আচ্ছা হ্যাঁ") while the bot is speaking
+#   - still fires on real answers ("Jubilee Hills location", "apartment please")
+#   - automatically reduces to 1-word when the bot is NOT speaking
+#     (MinWordsUserTurnStartStrategy built-in behaviour)
+DEFAULT_TURN_START_MIN_WORDS_TELEPHONY = 3
 DEFAULT_PROVISIONAL_VAD_PAUSE_SECS = 1.5
 DEFAULT_TURN_STOP_STRATEGY = "transcription"
 DEFAULT_CONTEXT_COMPACTION_ENABLED = False
 # Silence duration (seconds) the pipeline waits after the last speech
-# frame before closing a user turn. Raised from 0.4 s to prevent rapid
-# identical utterances ("Hello … Hello") from being split into separate
-# turns and generating duplicate bot responses.
-DEFAULT_SPEECH_TIMEOUT_SECS = 0.8
+# frame before closing a user turn. 0.6 s is a balance between:
+#   - not splitting short answers ("Apartment", "Jubilee Hills") into
+#     multiple turns (too short = duplicate LLM calls)
+#   - not adding too much dead air before the LLM starts (too long = unnatural pause)
+DEFAULT_SPEECH_TIMEOUT_SECS = 0.6
 
 
 class ExternalPBXFieldMapping(BaseModel):
