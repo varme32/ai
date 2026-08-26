@@ -117,3 +117,22 @@ def test_murf_session_config_includes_style_when_specified():
     cfg = svc._build_session_config()
     assert cfg["voice_config"]["voice_id"] == "en-US-marcus"
     assert cfg["voice_config"]["style"] == "Conversational"
+
+
+def test_murf_build_text_msg_attaches_voice_config():
+    from api.services.pipecat.murf_tts import MurfTTSService, MurfTTSSettings
+
+    svc = MurfTTSService(
+        api_key="test-key",
+        settings=MurfTTSSettings(
+            model="falcon-2",
+            voice="te-IN-ananya",
+            language="te",
+        ),
+    )
+    msg = svc._build_text_msg("హలో", context_id="ctx-123", end=False)
+    assert msg["text"] == "హలో"
+    assert msg["context_id"] == "ctx-123"
+    assert msg["end"] is False
+    assert msg["voice_config"]["voice_id"] == "te-IN-ananya"
+    assert msg["voice_config"]["locale"] == "te-IN"

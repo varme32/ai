@@ -217,7 +217,11 @@ class MurfTTSService(InterruptibleTTSService):
         context_id: str | None = None,
         end: bool = False,
     ) -> dict:
-        msg: dict[str, Any] = {"text": text, "end": end}
+        msg: dict[str, Any] = {
+            "text": text,
+            "end": end,
+            "voice_config": self._build_session_config()["voice_config"],
+        }
         if context_id:
             msg["context_id"] = context_id
         return msg
@@ -384,9 +388,8 @@ class MurfTTSService(InterruptibleTTSService):
         }
         voice = self._murf_voice()
         locale_str = _resolve_murf_locale(self._settings.language, voice)
-        data = {
+        data: dict[str, Any] = {
             "voiceId": voice,
-            "style": "Conversational",
             "text": text,
             "model": self._murf_model(),
             "format": "PCM",
@@ -394,6 +397,9 @@ class MurfTTSService(InterruptibleTTSService):
             "channelType": "MONO",
             "locale": locale_str,
         }
+        style = getattr(self._settings, "style", None)
+        if style and style is not NOT_GIVEN:
+            data["style"] = str(style).strip()
 
         await self.start_ttfb_metrics()
         await self.start_tts_usage_metrics(text)
