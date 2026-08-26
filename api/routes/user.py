@@ -464,7 +464,11 @@ async def get_voices(
     if provider == "murf":
         return await _get_murf_voices(
             organization_id=user.selected_organization_id,
+            model=model,
+            language=language,
             q=q,
+            gender=gender,
+            accent=accent,
         )
 
     try:
@@ -493,9 +497,14 @@ async def get_voices(
 
 async def _get_murf_voices(
     organization_id: int | None,
+    model: Optional[str] = None,
+    language: Optional[str] = None,
     q: Optional[str] = None,
+    gender: Optional[str] = None,
+    accent: Optional[str] = None,
 ) -> VoicesResponse:
-    """Fetch voices directly from Murf AI API using the org's stored TTS API key."""
+    """Fetch voices directly from Murf AI API using the org's stored TTS API key,
+    filtered by model (FALCON vs GEN2) and other attributes."""
     from api.services.configuration.ai_model_configuration import (
         get_resolved_ai_model_configuration,
     )
@@ -517,12 +526,23 @@ async def _get_murf_voices(
             detail="No Murf API key configured. Please add your Murf API key in TTS settings first.",
         )
 
+    # Map frontend/configuration model identifier to Murf API model query param:
+    # "falcon-2" -> "FALCON"
+    # "gen2" / "GEN2" -> "GEN2"
+    params: dict[str, str] = {}
+    if model:
+        m_lower = model.lower()
+        if "falcon" in m_lower:
+            params["model"] = "FALCON"
+        elif "gen2" in m_lower or "gen-2" in m_lower:
+            params["model"] = "GEN2"
+
     murf_url = "https://api.murf.ai/v1/speech/voices"
     headers = {"api-key": api_key, "Accept": "application/json"}
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(murf_url, headers=headers) as resp:
+            async with session.get(murf_url, headers=headers, params=params) as resp:
                 if resp.status != 200:
                     body = await resp.text()
                     logger.error(f"Murf voices API error {resp.status}: {body}")
@@ -538,22 +558,50 @@ async def _get_murf_voices(
     raw_voices = data if isinstance(data, list) else data.get("voices", [])
 
     voices: list[VoiceInfo] = []
+    genders_set: set[str] = set()
+    accents_set: set[str] = set()
+    languages_set: set[str] = set()
+
     for v in raw_voices:
         voice_id = v.get("voiceId") or v.get("voice_id") or v.get("id", "")
         name = v.get("displayName") or v.get("name") or voice_id
-        # Optional: filter by search query
+        v_gender = v.get("gender")
+        v_accent = v.get("accent")
+        v_locale = v.get("locale") or v.get("language")
+
+        if v_gender:
+            genders_set.add(v_gender.lower())
+        if v_accent:
+            accents_set.add(v_accent.lower())
+        if v_locale:
+            languages_set.add(v_locale.lower())
+
+        # Client-side / parameter filters
         if q and q.lower() not in name.lower() and q.lower() not in voice_id.lower():
             continue
+        if gender and v_gender and v_gender.lower() != gender.lower():
+            continue
+        if accent and v_accent and v_accent.lower() != accent.lower():
+            continue
+        if language and v_locale and not v_locale.lower().startswith(language.lower()):
+            continue
+
         voices.append(
             VoiceInfo(
                 voice_id=voice_id,
                 name=name,
                 description=v.get("description"),
-                accent=v.get("accent"),
-                gender=v.get("gender"),
-                language=v.get("locale") or v.get("language"),
+                accent=v_accent,
+                gender=v_gender,
+                language=v_locale,
                 preview_url=v.get("sampleAudioUrl") or v.get("preview_url"),
             )
         )
 
-    return VoicesResponse(provider="murf", voices=voices)
+    facets = VoiceFacets(
+        genders=sorted(list(genders_set)),
+        accents=sorted(list(accents_set)),
+        languages=sorted(list(languages_set)),
+    )
+
+    return VoicesResponse(provider="murf", voices=voices, facets=facets)
