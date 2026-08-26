@@ -44,9 +44,11 @@ class MurfTTSSettings(TTSSettings):
 
     voice and model are inherited from TTSSettings (str | _NotGiven | None).
     murf_sample_rate is an extra field specific to Murf (8000 / 16000 / 24000).
+    style is an optional speaking style (e.g. Conversational, Promo, Sad).
     """
 
     murf_sample_rate: int = 24000
+    style: str | _NotGiven | None = NOT_GIVEN
 
 
 def _normalize_murf_voice(voice_id: Any) -> str:
@@ -198,14 +200,16 @@ class MurfTTSService(InterruptibleTTSService):
     def _build_session_config(self) -> dict:
         voice = self._murf_voice()
         locale_str = _resolve_murf_locale(self._settings.language, voice)
-        return {
-            "voice_config": {
-                "voiceId": voice,
-                "model": self._murf_model(),
-                "style": "Conversational",
-                "locale": locale_str,
-            }
+        voice_cfg: dict[str, Any] = {
+            "voice_id": voice,
+            "voiceId": voice,
+            "model": self._murf_model(),
+            "locale": locale_str,
         }
+        style = getattr(self._settings, "style", None)
+        if style and style is not NOT_GIVEN:
+            voice_cfg["style"] = str(style).strip()
+        return {"voice_config": voice_cfg}
 
     def _build_text_msg(
         self,

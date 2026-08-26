@@ -83,3 +83,37 @@ def test_create_murf_gen2_also_matches_wire_rate():
     kwargs = mock_service.call_args.kwargs
     assert kwargs["sample_rate"] == 16000
     assert kwargs["settings"].murf_sample_rate == 16000
+
+
+def test_murf_session_config_omits_style_when_unset():
+    from api.services.pipecat.murf_tts import MurfTTSService, MurfTTSSettings
+
+    svc = MurfTTSService(
+        api_key="test-key",
+        settings=MurfTTSSettings(
+            model="falcon-2",
+            voice="hi-IN-kabir",
+            language="hi",
+        ),
+    )
+    cfg = svc._build_session_config()
+    assert cfg["voice_config"]["voice_id"] == "hi-IN-kabir"
+    assert cfg["voice_config"]["voiceId"] == "hi-IN-kabir"
+    assert cfg["voice_config"]["locale"] == "hi-IN"
+    assert "style" not in cfg["voice_config"]
+
+
+def test_murf_session_config_includes_style_when_specified():
+    from api.services.pipecat.murf_tts import MurfTTSService, MurfTTSSettings
+
+    svc = MurfTTSService(
+        api_key="test-key",
+        settings=MurfTTSSettings(
+            model="falcon-2",
+            voice="en-US-marcus",
+            style="Conversational",
+        ),
+    )
+    cfg = svc._build_session_config()
+    assert cfg["voice_config"]["voice_id"] == "en-US-marcus"
+    assert cfg["voice_config"]["style"] == "Conversational"

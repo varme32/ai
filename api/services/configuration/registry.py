@@ -1343,6 +1343,11 @@ class MurfTTSConfiguration(BaseTTSConfiguration):
         description="Murf AI voice ID.",
         json_schema_extra={"allow_custom_input": True},
     )
+    style: str | None = Field(
+        default=None,
+        description="Optional speaking style (e.g. Conversational, Promo, Sad, Calm). Leave blank for default.",
+        json_schema_extra={"allow_custom_input": True},
+    )
     language: str = Field(
         default="",
         description="ISO 639-1 language code for synthesis (e.g. 'en', 'hi').",

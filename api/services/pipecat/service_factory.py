@@ -873,6 +873,7 @@ def create_tts_service(
         voice = getattr(user_config.tts, "voice", None) or "Gordon"
         model = getattr(user_config.tts, "model", None) or "falcon-2"
         language = getattr(user_config.tts, "language", None)
+        style = getattr(user_config.tts, "style", None)
         murf_rate = _tts_wire_sample_rate(audio_config)
         return MurfTTSService(
             api_key=user_config.tts.api_key,
@@ -880,6 +881,7 @@ def create_tts_service(
                 model=model,
                 voice=voice,
                 language=language,
+                style=style,
                 murf_sample_rate=murf_rate,
             ),
             **_tts_runtime_kwargs(xml_function_tag_filter, audio_config),
