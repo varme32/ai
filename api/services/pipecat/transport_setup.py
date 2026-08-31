@@ -32,10 +32,8 @@ async def create_webrtc_transport(
             audio_in_sample_rate=audio_config.transport_in_sample_rate,
             audio_out_sample_rate=audio_config.transport_out_sample_rate,
             audio_out_mixer=mixer,
-            audio_out_max_consecutive_failures=60,
-            # Do not insert 0.5s holes between failed writes — that chops
-            # the greeting into half-words. ICE wait happens before speak.
-            audio_out_sleep_between_failures=0.0,
+            audio_out_max_consecutive_failures=200,
+            audio_out_sleep_between_failures=0.02,
             **realtime_param_overrides(is_realtime),
         ),
     )
