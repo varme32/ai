@@ -437,6 +437,12 @@ export function ServiceConfigurationForm({
             });
         }
 
+        // Always clear the voice field when switching TTS providers so the old
+        // provider's voice ID does not pre-populate the new provider's picker.
+        if (service === "tts") {
+            preservedValues["tts_voice"] = "";
+        }
+
         preservedValues[`${service}_provider`] = providerName;
         reset(preservedValues);
         setServiceProviders(prev => ({ ...prev, [service]: providerName }));
@@ -708,6 +714,7 @@ export function ServiceConfigurationForm({
                         }}
                         model={watch("tts_model") as string || undefined}
                         allowManualInput={true}
+                        apiKey={apiKeys.tts?.[0] || undefined}
                     />
                 );
             }

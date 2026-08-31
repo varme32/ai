@@ -456,6 +456,7 @@ async def get_voices(
     q: Optional[str] = None,
     gender: Optional[str] = None,
     accent: Optional[str] = None,
+    api_key: Optional[str] = None,
     user: UserModel = Depends(get_user),
 ) -> VoicesResponse:
     """Get available voices for a TTS provider."""
@@ -469,6 +470,7 @@ async def get_voices(
             q=q,
             gender=gender,
             accent=accent,
+            api_key_override=api_key,
         )
 
     try:
@@ -502,23 +504,30 @@ async def _get_murf_voices(
     q: Optional[str] = None,
     gender: Optional[str] = None,
     accent: Optional[str] = None,
+    api_key_override: Optional[str] = None,
 ) -> VoicesResponse:
     """Fetch voices directly from Murf AI API using the org's stored TTS API key,
-    filtered by model (FALCON vs GEN2) and other attributes."""
+    filtered by model (FALCON vs GEN2) and other attributes.
+
+    If ``api_key_override`` is provided it is used directly, allowing the
+    frontend to pass the key typed into the form before it has been saved.
+    """
     from api.services.configuration.ai_model_configuration import (
         get_resolved_ai_model_configuration,
     )
 
-    # Retrieve the stored Murf API key from the org's AI model configuration
-    resolved = await get_resolved_ai_model_configuration(organization_id=organization_id)
-    tts_config = resolved.effective.tts if resolved.effective else None
-    api_key: str | None = None
-    if tts_config and getattr(tts_config, "provider", None) == "murf":
-        raw_key = getattr(tts_config, "api_key", None)
-        if isinstance(raw_key, list):
-            api_key = raw_key[0] if raw_key else None
-        else:
-            api_key = raw_key
+    api_key: str | None = api_key_override.strip() if api_key_override else None
+
+    if not api_key:
+        # Fall back to the key stored in the org's saved TTS configuration
+        resolved = await get_resolved_ai_model_configuration(organization_id=organization_id)
+        tts_config = resolved.effective.tts if resolved.effective else None
+        if tts_config and getattr(tts_config, "provider", None) == "murf":
+            raw_key = getattr(tts_config, "api_key", None)
+            if isinstance(raw_key, list):
+                api_key = raw_key[0] if raw_key else None
+            else:
+                api_key = raw_key
 
     if not api_key:
         raise HTTPException(

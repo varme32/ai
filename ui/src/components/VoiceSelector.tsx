@@ -35,6 +35,8 @@ interface VoiceSelectorProps {
     showFilters?: boolean;
     allowManualInput?: boolean;
     className?: string;
+    /** Optional API key (e.g. typed in form but not yet saved). Used for Murf. */
+    apiKey?: string;
 }
 
 export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
@@ -46,6 +48,7 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
     showFilters = false,
     allowManualInput = true,
     className,
+    apiKey,
 }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [searchTerm, setSearchTerm] = useState("");
@@ -90,9 +93,10 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
         setError(null);
 
         try {
-            const query: { model?: string; language?: string } = {};
+            const query: { model?: string; language?: string; api_key?: string } = {};
             if (model) query.model = model;
             if (language) query.language = language;
+            if (apiKey && providerKey === "murf") query.api_key = apiKey;
             const response = await getVoicesApiV1UserConfigurationsVoicesProviderGet({
                 path: { provider: providerKey },
                 query: Object.keys(query).length > 0 ? query : undefined,
@@ -535,9 +539,9 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    const [gender, setGender] = useState(DEFAULT_GENDER);
-    const [accent, setAccent] = useState(DEFAULT_ACCENT);
-    const [language, setLanguage] = useState(DEFAULT_LANGUAGE);
+    const [gender, setGender] = useState(ALL_FILTER_VALUE);
+    const [accent, setAccent] = useState(ALL_FILTER_VALUE);
+    const [language, setLanguage] = useState(ALL_FILTER_VALUE);
     const [searchInput, setSearchInput] = useState("");
     const [debouncedSearch, setDebouncedSearch] = useState("");
 
@@ -628,7 +632,7 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
     const languageOptions = useMemo(() => toSortedOptions(facets.languages, language, languageLabel), [facets.languages, language]);
 
     const openModal = () => {
-        setGender(DEFAULT_GENDER); setAccent(DEFAULT_ACCENT); setLanguage(DEFAULT_LANGUAGE);
+        setGender(ALL_FILTER_VALUE); setAccent(ALL_FILTER_VALUE); setLanguage(ALL_FILTER_VALUE);
         setSearchInput(""); setDebouncedSearch(""); setManualMode(false);
         setManualVoiceId(value); setPendingVoiceId(value); setIsOpen(true);
     };
