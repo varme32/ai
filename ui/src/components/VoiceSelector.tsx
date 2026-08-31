@@ -22,8 +22,8 @@ import { LANGUAGE_DISPLAY_NAMES } from "@/constants/languages";
 import { cn } from "@/lib/utils";
 
 // Providers that have MPS voice endpoints
-type TTSProviderWithVoices = "elevenlabs" | "deepgram" | "sarvam" | "cartesia" | "dograh" | "rime" | "murf";
-const MPS_VOICE_PROVIDERS: TTSProviderWithVoices[] = ["elevenlabs", "deepgram", "sarvam", "cartesia", "dograh", "rime", "murf"];
+type TTSProviderWithVoices = "elevenlabs" | "deepgram" | "sarvam" | "cartesia" | "dograh" | "rime" | "murf" | "smallest";
+const MPS_VOICE_PROVIDERS: TTSProviderWithVoices[] = ["elevenlabs", "deepgram", "sarvam", "cartesia", "dograh", "rime", "murf", "smallest"];
 const ALL_FILTER_VALUE = "__all__";
 
 interface VoiceSelectorProps {
@@ -78,6 +78,7 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
             dograh: "dograh",
             rime: "rime",
             murf: "murf",
+            smallest: "smallest",
         };
         return providerMap[providerName.toLowerCase()] || null;
     }, []);
@@ -95,6 +96,7 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
         try {
             const query: { model?: string; language?: string; api_key?: string } = {};
             if (model) query.model = model;
+            // For Smallest AI, always pass the current language so the voice list is pre-filtered
             if (language) query.language = language;
             if (apiKey && providerKey === "murf") query.api_key = apiKey;
             const response = await getVoicesApiV1UserConfigurationsVoicesProviderGet({

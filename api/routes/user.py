@@ -421,7 +421,7 @@ async def reactivate_api_key(
 
 
 # Voice Configuration Endpoints
-TTSProvider = Literal["elevenlabs", "deepgram", "sarvam", "cartesia", "dograh", "rime", "murf"]
+TTSProvider = Literal["elevenlabs", "deepgram", "sarvam", "cartesia", "dograh", "rime", "murf", "smallest"]
 
 
 class VoiceInfo(BaseModel):
@@ -471,6 +471,16 @@ async def get_voices(
             gender=gender,
             accent=accent,
             api_key_override=api_key,
+        )
+
+    # Smallest AI voices are fetched from the public get_voices API (no auth required)
+    if provider == "smallest":
+        return await _get_smallest_voices(
+            model=model,
+            language=language,
+            q=q,
+            gender=gender,
+            accent=accent,
         )
 
     try:
@@ -614,3 +624,95 @@ async def _get_murf_voices(
     )
 
     return VoicesResponse(provider="murf", voices=voices, facets=facets)
+
+
+async def _get_smallest_voices(
+    model: Optional[str] = None,
+    language: Optional[str] = None,
+    q: Optional[str] = None,
+    gender: Optional[str] = None,
+    accent: Optional[str] = None,
+) -> VoicesResponse:
+    """Fetch voices from the public Smallest AI get_voices API.
+
+    The endpoint ``GET https://api.smallest.ai/waves/v1/{model}/get_voices``
+    requires no authentication and returns the full voice catalog for that model.
+    Language names in the API response (e.g. "telugu") are converted to ISO 639-1
+    codes (e.g. "te") for consistency with our settings form.
+    """
+    from api.services.configuration.options.smallest import SMALLEST_LANGUAGE_NAME_TO_ISO
+
+    resolved_model = (model or "lightning_v3.1").replace("-", "_")
+    # Smallest AI URL uses hyphens in the path
+    model_slug = resolved_model.replace("_", "-")
+    url = f"https://api.smallest.ai/waves/v1/{model_slug}/get_voices"
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    logger.error(f"Smallest AI voices API error {resp.status}: {body[:200]}")
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Smallest AI API returned {resp.status}: {body[:200]}",
+                    )
+                data = await resp.json()
+    except aiohttp.ClientError as e:
+        raise HTTPException(status_code=502, detail=f"Failed to contact Smallest AI API: {e}")
+
+    raw_voices = data.get("voices", []) if isinstance(data, dict) else data
+
+    voices: list[VoiceInfo] = []
+    genders_set: set[str] = set()
+    accents_set: set[str] = set()
+    languages_set: set[str] = set()
+
+    for v in raw_voices:
+        tags = v.get("tags", {})
+        voice_id = v.get("voiceId") or v.get("voice_id") or v.get("id", "")
+        name = v.get("displayName") or v.get("name") or voice_id
+        v_gender = tags.get("gender", "")
+        v_accent = tags.get("accent", "")
+        # API returns full language names ("telugu"); map to ISO codes ("te")
+        raw_langs: list[str] = tags.get("language") or tags.get("languages") or []
+        iso_langs = [SMALLEST_LANGUAGE_NAME_TO_ISO.get(ln.lower(), ln.lower()) for ln in raw_langs]
+
+        if v_gender:
+            genders_set.add(v_gender.lower())
+        if v_accent:
+            accents_set.add(v_accent.lower())
+        for iso in iso_langs:
+            languages_set.add(iso)
+
+        # Filter by language ISO code (e.g. "te" for Telugu)
+        if language and language.lower() not in iso_langs:
+            continue
+        # Filter by gender
+        if gender and v_gender and v_gender.lower() != gender.lower():
+            continue
+        # Filter by accent
+        if accent and v_accent and v_accent.lower() != accent.lower():
+            continue
+        # Search filter
+        if q and q.lower() not in name.lower() and q.lower() not in voice_id.lower():
+            continue
+
+        voices.append(
+            VoiceInfo(
+                voice_id=voice_id,
+                name=name,
+                gender=v_gender or None,
+                accent=v_accent or None,
+                language=iso_langs[0] if iso_langs else None,
+            )
+        )
+
+    facets = VoiceFacets(
+        genders=sorted(list(genders_set)),
+        accents=sorted(list(accents_set)),
+        languages=sorted(list(languages_set)),
+    )
+
+    return VoicesResponse(provider="smallest", voices=voices, facets=facets)
+

@@ -46,6 +46,7 @@ from api.services.configuration.options import (
     SARVAM_TTS_MODELS,
     SARVAM_V2_VOICES,
     SARVAM_V3_VOICES,
+    SMALLEST_LANGUAGE_NAME_TO_ISO,
     SMALLEST_TTS_LANGUAGES,
     SMALLEST_TTS_MODELS,
     SMALLEST_TTS_PRO_VOICES,
@@ -1294,24 +1295,19 @@ class SmallestAITTSConfiguration(BaseTTSConfiguration):
     provider: Literal[ServiceProviders.SMALLEST] = ServiceProviders.SMALLEST
     model: str = Field(
         default="lightning_v3.1",
-        description="Smallest AI TTS model. lightning_v3.1_pro is the premium pool (American, British, Indian accents); lightning_v3.1 is the standard pool with 217 voices across 12 languages.",
+        description="Smallest AI TTS model. lightning_v3.1_pro is the premium pool (American, British, Indian accents); lightning_v3.1 is the standard pool with 100+ voices across 20+ languages including Telugu.",
         json_schema_extra={"examples": SMALLEST_TTS_MODELS},
     )
     voice: str = Field(
-        default="sophia",
-        description="Smallest AI voice ID. Available voices differ by model: lightning_v3.1 has a broad multilingual pool; lightning_v3.1_pro has premium American, British, and Indian accent voices (English + Hindi only).",
+        default="",
+        description="Smallest AI voice ID. Voices are loaded dynamically from the API based on the selected model and language.",
         json_schema_extra={
-            "examples": list(SMALLEST_TTS_VOICES),
             "allow_custom_input": True,
-            "model_options": {
-                "lightning_v3.1": list(SMALLEST_TTS_VOICES),
-                "lightning_v3.1_pro": list(SMALLEST_TTS_PRO_VOICES),
-            },
         },
     )
     language: str = Field(
         default="en",
-        description="ISO 639-1 language code for synthesis.",
+        description="ISO 639-1 language code for synthesis. 'te' = Telugu, 'hi' = Hindi, 'en' = English, etc.",
         json_schema_extra={
             "examples": SMALLEST_TTS_LANGUAGES,
             "allow_custom_input": True,

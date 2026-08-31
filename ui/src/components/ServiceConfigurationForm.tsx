@@ -713,12 +713,14 @@ export function ServiceConfigurationForm({
                             setValue(`${service}_${field}`, voiceId, { shouldDirty: true });
                         }}
                         model={watch("tts_model") as string || undefined}
+                        language={watch("tts_language") as string || undefined}
                         allowManualInput={true}
                         apiKey={apiKeys.tts?.[0] || undefined}
                     />
                 );
             }
         }
+
 
         if (actualSchema?.allow_custom_input && dropdownOptions && dropdownOptions.length > 0) {
             const fieldKey = `${service}_${field}`;
