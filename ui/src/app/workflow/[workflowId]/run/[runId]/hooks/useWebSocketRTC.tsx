@@ -677,7 +677,7 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
                                 pingIntervalRef.current = null;
                             }
                         }
-                    }, 5000);
+                    }, 1000);
                 };
 
                 dc.onclose = () => {

@@ -669,7 +669,7 @@ class SmallWebRTCConnection(BaseObject):
             # so we are going to trust aiortc in this case
             return self._pc.connectionState == "connected"
         # Checks if the last received ping was within the last 3 seconds.
-        return (time.time() - self._last_received_time) < 3
+        return (time.time() - self._last_received_time) < 8
 
     def audio_input_track(self):
         """Get the audio input track wrapper.
