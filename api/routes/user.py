@@ -678,6 +678,17 @@ async def _get_smallest_voices(
         raw_langs: list[str] = tags.get("language") or tags.get("languages") or []
         iso_langs = [SMALLEST_LANGUAGE_NAME_TO_ISO.get(ln.lower(), ln.lower()) for ln in raw_langs]
 
+        # Primary display language: use the first recommendedLanguage (best language for this voice),
+        # falling back to the requested language if the voice supports it, or iso_langs[0].
+        raw_recommended: list[str] = tags.get("recommendedLanguages") or []
+        recommended_iso = [SMALLEST_LANGUAGE_NAME_TO_ISO.get(r.lower(), r.lower()) for r in raw_recommended]
+        if recommended_iso:
+            primary_lang = recommended_iso[0]
+        elif language and language.lower() in iso_langs:
+            primary_lang = language.lower()
+        else:
+            primary_lang = iso_langs[0] if iso_langs else None
+
         if v_gender:
             genders_set.add(v_gender.lower())
         if v_accent:
@@ -704,9 +715,10 @@ async def _get_smallest_voices(
                 name=name,
                 gender=v_gender or None,
                 accent=v_accent or None,
-                language=iso_langs[0] if iso_langs else None,
+                language=primary_lang,
             )
         )
+
 
     facets = VoiceFacets(
         genders=sorted(list(genders_set)),

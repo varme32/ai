@@ -53,7 +53,8 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
     const [isOpen, setIsOpen] = useState(false);
     const [searchTerm, setSearchTerm] = useState("");
     const [genderFilter, setGenderFilter] = useState(ALL_FILTER_VALUE);
-    const [languageFilter, setLanguageFilter] = useState(ALL_FILTER_VALUE);
+    // Initialize languageFilter from the language prop so the picker shows filtered voices immediately
+    const [languageFilter, setLanguageFilter] = useState(language || ALL_FILTER_VALUE);
     const [accentFilter, setAccentFilter] = useState(ALL_FILTER_VALUE);
     const [isManualInput, setIsManualInput] = useState(false);
     const [manualVoiceId, setManualVoiceId] = useState(value || "");
@@ -62,6 +63,11 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
     const [error, setError] = useState<string | null>(null);
     const [playingPreview, setPlayingPreview] = useState<string | null>(null);
     const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
+
+    // Sync languageFilter whenever the language prop changes (e.g. user picks Telugu in the form)
+    useEffect(() => {
+        setLanguageFilter(language || ALL_FILTER_VALUE);
+    }, [language]);
 
     // Check if provider has MPS voice endpoint
     const hasMPSVoiceEndpoint = useCallback((providerName: string): boolean => {
