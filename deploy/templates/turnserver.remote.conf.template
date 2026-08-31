@@ -23,6 +23,8 @@ static-auth-secret=__DOGRAH_TURN_SECRET__
 fingerprint
 no-cli
 no-multicast-peers
+cert=/certs/local.crt
+pkey=/certs/local.key
 
 # Logging
 log-file=stdout
