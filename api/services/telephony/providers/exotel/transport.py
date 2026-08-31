@@ -1,4 +1,4 @@
-﻿"""Exotel transport factory.
+"""Exotel transport factory.
 
 Exotel Voicebot streams 16-bit linear PCM (8 kHz mono) as base64 JSON:
 - Incoming start/media events use snake_case (stream_sid, call_sid)
@@ -78,6 +78,8 @@ async def create_transport(
             audio_out_sample_rate=audio_config.transport_out_sample_rate,
             audio_out_mixer=mixer,
             serializer=serializer,
+            audio_out_max_consecutive_failures=200,
+            audio_out_sleep_between_failures=0.02,
             **transport_kwargs,
         ),
     )
