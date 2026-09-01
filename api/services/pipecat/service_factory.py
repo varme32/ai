@@ -970,12 +970,17 @@ def create_llm_service_from_provider(
         from pipecat.services.google.llm import GoogleThinkingConfig
 
         model = _migrate_deprecated_google_model(model)
+        if "gemini-3" in model:
+            thinking_cfg = GoogleThinkingConfig(thinking_level="minimal")
+        else:
+            thinking_cfg = GoogleThinkingConfig(thinking_budget=0)
+
         return DograhGoogleLLMService(
             api_key=api_key,
             settings=GoogleLLMSettings(
                 model=model,
                 temperature=0.1,
-                thinking=GoogleThinkingConfig(thinking_budget=0),
+                thinking=thinking_cfg,
             ),
         )
     elif provider == ServiceProviders.GOOGLE_VERTEX.value:
