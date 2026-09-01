@@ -967,10 +967,16 @@ def create_llm_service_from_provider(
             **kwargs,
         )
     elif provider == ServiceProviders.GOOGLE.value:
+        from pipecat.services.google.llm import GoogleThinkingConfig
+
         model = _migrate_deprecated_google_model(model)
         return DograhGoogleLLMService(
             api_key=api_key,
-            settings=GoogleLLMSettings(model=model, temperature=0.1),
+            settings=GoogleLLMSettings(
+                model=model,
+                temperature=0.1,
+                thinking=GoogleThinkingConfig(thinking_budget=0),
+            ),
         )
     elif provider == ServiceProviders.GOOGLE_VERTEX.value:
         return DograhGoogleVertexLLMService(
