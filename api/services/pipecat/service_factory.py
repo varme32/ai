@@ -846,8 +846,13 @@ def create_tts_service(
         )
         if speed and speed != 1.0:
             settings_kwargs.speed = speed
+        base_url = (
+            getattr(user_config.tts, "base_url", None)
+            or "wss://api.india.smallest.ai"
+        )
         return SmallestTTSService(
             api_key=user_config.tts.api_key,
+            base_url=base_url,
             settings=settings_kwargs,
             **_tts_runtime_kwargs(xml_function_tag_filter, audio_config),
         )

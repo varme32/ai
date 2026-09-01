@@ -149,7 +149,7 @@ class SmallestSTTService(WebsocketSTTService):
         self,
         *,
         api_key: str,
-        base_url: str = "wss://api.smallest.ai",
+        base_url: str = "wss://api.india.smallest.ai",
         encoding: str = "linear16",
         sample_rate: int | None = None,
         settings: Settings | None = None,

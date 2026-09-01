@@ -645,7 +645,7 @@ async def _get_smallest_voices(
     resolved_model = (model or "lightning_v3.1").replace("-", "_")
     # Smallest AI URL uses hyphens in the path
     model_slug = resolved_model.replace("_", "-")
-    url = f"https://api.smallest.ai/waves/v1/{model_slug}/get_voices"
+    url = f"https://api.india.smallest.ai/waves/v1/{model_slug}/get_voices"
 
     try:
         async with aiohttp.ClientSession() as session:
