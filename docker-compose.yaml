@@ -241,6 +241,10 @@ services:
 
     ports:
       - "8000:8000"
+    restart: unless-stopped
+    volumes:
+      - ./api:/app/api
+      - ./pipecat/src/pipecat:/opt/venv/lib/python3.13/site-packages/pipecat
     depends_on:
       postgres:
         condition: service_healthy
