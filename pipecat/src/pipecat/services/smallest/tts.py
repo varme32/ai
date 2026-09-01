@@ -235,11 +235,19 @@ class SmallestTTSService(InterruptibleTTSService):
         Returns:
             Dictionary with the API message payload.
         """
+        raw_lang = self._settings.language
+        if isinstance(raw_lang, Language):
+            lang_code = self.language_to_service_language(raw_lang) or "en"
+        elif isinstance(raw_lang, str):
+            lang_code = raw_lang
+        else:
+            lang_code = "en"
+
         msg = {
             "text": text,
             "voice_id": self._settings.voice,
             "model": self._settings.model,
-            "language": self._settings.language,
+            "language": lang_code,
             "sample_rate": self.sample_rate,
         }
 
