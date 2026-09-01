@@ -696,9 +696,21 @@ async def _get_smallest_voices(
         for iso in iso_langs:
             languages_set.add(iso)
 
-        # Filter by language ISO code (e.g. "te" for Telugu)
-        if language and language.lower() not in iso_langs:
-            continue
+        # Filter by language using recommendedLanguages (precise) or iso_langs (fallback).
+        # Smallest AI tags ALL Indic voices with every Indic language (code-switching group),
+        # so filtering by iso_langs when language="te" would return all 111 Indian voices.
+        # recommendedLanguages only lists the voice's PRIMARY languages, giving the correct ~8 Telugu voices.
+        if language:
+            lang_lower = language.lower()
+            if recommended_iso:
+                # Voice has recommended language metadata — use it for precise filtering
+                if lang_lower not in recommended_iso:
+                    continue
+            else:
+                # No recommendedLanguages — fall back to full language list
+                if lang_lower not in iso_langs:
+                    continue
+
         # Filter by gender
         if gender and v_gender and v_gender.lower() != gender.lower():
             continue
