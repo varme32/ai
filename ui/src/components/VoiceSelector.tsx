@@ -64,9 +64,12 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
     const [playingPreview, setPlayingPreview] = useState<string | null>(null);
     const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
 
-    // Sync languageFilter whenever the language prop changes (e.g. user picks Telugu in the form)
+    // When a language prop is provided, the server already pre-filters voices by that language.
+    // So set client-side languageFilter to ALL to show everything the server returned.
+    // (Some Telugu voices have their primary display language as "en" due to code-switching,
+    // so filtering client-side by "te" would incorrectly hide them.)
     useEffect(() => {
-        setLanguageFilter(language || ALL_FILTER_VALUE);
+        setLanguageFilter(ALL_FILTER_VALUE);
     }, [language]);
 
     // Check if provider has MPS voice endpoint
