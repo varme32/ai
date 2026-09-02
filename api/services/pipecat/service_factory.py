@@ -967,20 +967,18 @@ def create_llm_service_from_provider(
             **kwargs,
         )
     elif provider == ServiceProviders.GOOGLE.value:
-        from pipecat.services.google.llm import GoogleThinkingConfig
-
         model = _migrate_deprecated_google_model(model)
-        if "gemini-3" in model:
-            thinking_cfg = GoogleThinkingConfig(thinking_level="minimal")
-        else:
-            thinking_cfg = GoogleThinkingConfig(thinking_budget=0)
-
+        # Pipecat's GoogleLLMService._maybe_unset_thinking_budget() already applies
+        # the correct model-specific thinking config automatically:
+        #   - gemini-2.5-flash  → thinking_budget=0  (disable thinking)
+        #   - gemini-3*-flash   → thinking_level="minimal"
+        # Passing an explicit thinking config here overrides that logic and causes
+        # 400 "Invalid Argument" errors when the wrong param type is used for a model.
         return DograhGoogleLLMService(
             api_key=api_key,
             settings=GoogleLLMSettings(
                 model=model,
                 temperature=0.1,
-                thinking=thinking_cfg,
             ),
         )
     elif provider == ServiceProviders.GOOGLE_VERTEX.value:
