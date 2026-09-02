@@ -82,6 +82,7 @@ from pipecat.services.sarvam.tts import SarvamTTSService, SarvamTTSSettings
 from pipecat.services.smallest.stt import SmallestSTTService, SmallestSTTSettings
 from pipecat.services.smallest.tts import SmallestTTSService, SmallestTTSSettings
 from api.services.pipecat.murf_tts import MurfTTSService, MurfTTSSettings
+from pipecat.services.tts_service import TextAggregationMode
 from pipecat.services.speaches.llm import SpeachesLLMService, SpeachesLLMSettings
 from pipecat.services.speaches.stt import SpeachesSTTService, SpeachesSTTSettings
 from pipecat.services.speaches.tts import SpeachesTTSService, SpeachesTTSSettings
@@ -115,11 +116,17 @@ def _tts_wire_sample_rate(audio_config) -> int:
 
 
 def _tts_runtime_kwargs(text_filter, audio_config) -> dict:
-    """Shared TTS constructor kwargs. PCM rate follows the transport."""
+    """Shared TTS constructor kwargs. PCM rate follows the transport.
+
+    TOKEN aggregation starts synthesis on the first LLM tokens instead of
+    waiting for a sentence boundary, which is what made replies feel
+    1–2 s late after the model had already started streaming.
+    """
     return {
         "sample_rate": _tts_wire_sample_rate(audio_config),
         "text_filters": [text_filter],
         "skip_aggregator_types": ["recording_router", "recording"],
+        "text_aggregation_mode": TextAggregationMode.TOKEN,
         "silence_time_s": 1.0,
     }
 
@@ -130,7 +137,7 @@ def _gemini_live_vad_params():
     LOW start/end sensitivity plus 300 ms prefix and 700 ms silence made
     interruptions feel broken and added ~1 s after the caller stopped
     speaking. HIGH start detects barge-in quickly; HIGH end closes the
-    turn on a short pause; 400 ms silence still covers Telugu geminates
+    turn on a short pause; 300 ms silence still covers Telugu geminates
     without the old 700 ms dead air.
     """
     from google.genai.types import EndSensitivity, StartSensitivity
@@ -140,7 +147,7 @@ def _gemini_live_vad_params():
         start_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
         end_sensitivity=EndSensitivity.END_SENSITIVITY_HIGH,
         prefix_padding_ms=100,
-        silence_duration_ms=400,
+        silence_duration_ms=300,
     )
 
 

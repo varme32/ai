@@ -71,6 +71,7 @@ class DograhSarvamSTTService(SarvamSTTService):
                                 if hasattr(message, "dict")
                                 else str(message)
                             ),
+                            finalized=True,
                         )
                     )
 

@@ -62,7 +62,9 @@ def test_create_murf_tts_matches_telephony_wire_rate():
     kwargs = mock_service.call_args.kwargs
     assert kwargs["sample_rate"] == 16000
     assert kwargs["settings"].murf_sample_rate == 16000
-    assert "text_aggregation_mode" not in kwargs
+    from pipecat.services.tts_service import TextAggregationMode
+
+    assert kwargs["text_aggregation_mode"] == TextAggregationMode.TOKEN
 
 
 def test_create_murf_gen2_also_matches_wire_rate():

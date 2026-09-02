@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -163,10 +164,13 @@ async def test_vobiz_ring_callback_accepts_signed_form_body():
             new_callable=AsyncMock,
             return_value=("https://example.test", "wss://example.test"),
         ),
+        patch(
+            "api.services.telephony.providers.vobiz.routes.kickoff_pipeline_prewarm"
+        ) as kickoff_prewarm,
     ):
         db_client.get_workflow_run_by_id = AsyncMock(return_value=workflow_run)
         db_client.get_workflow_by_id = AsyncMock(
-            return_value=SimpleNamespace(organization_id=11)
+            return_value=SimpleNamespace(organization_id=11, user_id=3)
         )
         db_client.update_workflow_run = AsyncMock()
 
@@ -174,9 +178,17 @@ async def test_vobiz_ring_callback_accepts_signed_form_body():
             workflow_run_id=123,
             request=request,
         )
+        await asyncio.sleep(0)
 
     assert result == {"status": "success"}
     db_client.update_workflow_run.assert_awaited_once()
+    kickoff_prewarm.assert_called_once_with(
+        workflow_id=7,
+        workflow_run_id=123,
+        organization_id=11,
+        user_id=3,
+        provider_name=provider.PROVIDER_NAME,
+    )
 
 
 @pytest.mark.asyncio

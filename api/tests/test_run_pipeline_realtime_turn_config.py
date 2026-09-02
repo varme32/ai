@@ -42,7 +42,7 @@ def test_gemini_live_vad_is_tuned_for_fast_barge_in():
     assert vad.start_sensitivity == StartSensitivity.START_SENSITIVITY_HIGH
     assert vad.end_sensitivity == EndSensitivity.END_SENSITIVITY_HIGH
     assert vad.prefix_padding_ms == 100
-    assert vad.silence_duration_ms == 400
+    assert vad.silence_duration_ms == 300
 
 
 def test_gemini_realtime_uses_local_vad_with_local_interruptions():
@@ -292,6 +292,7 @@ def test_external_turn_stt_uses_longer_stop_timeout():
 
 
 def test_standard_stt_keeps_default_stop_timeout():
+    assert DEFAULT_USER_TURN_STOP_TIMEOUT == 1.5
     assert (
         _resolve_user_turn_stop_timeout({}, uses_external_turns=False)
         == DEFAULT_USER_TURN_STOP_TIMEOUT

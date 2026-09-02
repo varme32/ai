@@ -119,7 +119,11 @@ from pipecat.utils.run_context import set_current_org_id, set_current_run_id
 # Setup tracing if enabled
 ensure_tracing()
 
-DEFAULT_USER_TURN_STOP_TIMEOUT = 5.0
+# Safety cap after the last VAD/transcript event when the stop strategy
+# never fires (missing finalized transcript, stuck STT). 1.5s is enough
+# for Smallest/Sarvam P99 without the 5s dead air that made replies feel
+# like the bot had hung.
+DEFAULT_USER_TURN_STOP_TIMEOUT = 1.5
 EXTERNAL_TURN_USER_STOP_TIMEOUT = 30.0
 
 
@@ -212,9 +216,6 @@ def _create_non_realtime_user_turn_stop_strategies(
             )
         ]
 
-    # 0.8 s silence threshold — raised from 0.4 s. The longer window prevents
-    # rapid identical utterances (e.g. "Hello … Hello") from being closed into
-    # separate turns and generating duplicate LLM responses on phone calls.
     return [SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=DEFAULT_SPEECH_TIMEOUT_SECS)]
 
 

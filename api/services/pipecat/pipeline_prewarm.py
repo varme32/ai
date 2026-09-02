@@ -186,23 +186,16 @@ def kickoff_pipeline_prewarm(
 async def take_pipeline_prewarm(workflow_run_id: int) -> Optional[PipelineResources]:
     """Pop a completed (or in-flight) prewarm for this run.
 
-    Waits briefly for an in-flight task so answer-time setup can reuse
-    ring-time work. Returns None on miss, timeout, or failure so the
-    caller can build resources itself.
+    Always awaits in-flight work: it is the same setup an inline rebuild
+    would do, and cancelling it at answer just adds a second cold start
+    while the caller is already on the line. Returns None on miss or
+    failure so the caller can build resources itself.
     """
     entry = _prewarm.pop(workflow_run_id, None)
     if entry is None:
         return None
     try:
-        # Answer-time setup must reuse ring-time work instead of cancelling
-        # it at 2s and rebuilding from scratch while the caller is on the line.
-        return await asyncio.wait_for(entry.task, timeout=8.0)
-    except asyncio.TimeoutError:
-        entry.task.cancel()
-        logger.warning(
-            f"Pipeline prewarm timed out for run {workflow_run_id}; building inline"
-        )
-        return None
+        return await entry.task
     except asyncio.CancelledError:
         return None
     except Exception:

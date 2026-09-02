@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from api.services.configuration.check_validity import UserConfigurationValidator
 from api.services.configuration.registry import (
@@ -78,3 +78,32 @@ def test_create_smallest_tts_service_normalizes_hyphenated_model_values():
     assert mock_service.call_count == 1
     kwargs = mock_service.call_args.kwargs
     assert kwargs["settings"].model == "lightning_v3.1"
+    from pipecat.services.tts_service import TextAggregationMode
+
+    assert kwargs["text_aggregation_mode"] == TextAggregationMode.TOKEN
+
+
+async def test_smallest_stt_marks_is_final_transcripts_as_finalized():
+    """Final transcripts must set finalized=True so turn-end does not wait STT P99."""
+    from pipecat.frames.frames import TranscriptionFrame
+    from pipecat.services.smallest.stt import SmallestSTTService
+
+    service = SmallestSTTService(api_key="test-key")
+    captured = []
+
+    async def capture(frame, direction=None):
+        captured.append(frame)
+
+    service.push_frame = capture
+    service._user_id = "user"
+    service.stop_processing_metrics = AsyncMock()
+    service._handle_transcription = AsyncMock()
+
+    await service._process_response(
+        {"is_final": True, "transcript": "hello there", "language": "en"}
+    )
+
+    finals = [frame for frame in captured if isinstance(frame, TranscriptionFrame)]
+    assert len(finals) == 1
+    assert finals[0].finalized is True
+    assert finals[0].text == "hello there"

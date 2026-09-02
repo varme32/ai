@@ -189,6 +189,7 @@ class SmallestTTSService(InterruptibleTTSService):
         self._word_timestamps = word_timestamps
         self._receive_task = None
         self._keepalive_task = None
+        self._connect_lock = asyncio.Lock()
 
         # Word-timestamp offset tracking. Smallest sends one request per
         # run_tts() call and reports word timestamps relative to *that request's*
@@ -268,11 +269,15 @@ class SmallestTTSService(InterruptibleTTSService):
     async def start(self, frame: StartFrame):
         """Start the Smallest TTS service.
 
+        The WebSocket handshake runs in the background so StartFrame is not
+        blocked on RTT. ``run_tts`` awaits ``_connect`` if the socket is not
+        ready yet, overlapping greeting queueing with the handshake.
+
         Args:
             frame: The start frame containing initialization parameters.
         """
         await super().start(frame)
-        await self._connect()
+        self.create_task(self._connect())
 
     async def stop(self, frame: EndFrame):
         """Stop the Smallest TTS service.
@@ -302,15 +307,19 @@ class SmallestTTSService(InterruptibleTTSService):
 
     async def _connect(self):
         """Connect to Smallest WebSocket and start receive task."""
-        await super()._connect()
+        async with self._connect_lock:
+            if self._websocket and self._websocket.state is State.OPEN:
+                return
 
-        await self._connect_websocket()
+            await super()._connect()
 
-        if self._websocket and not self._receive_task:
-            self._receive_task = self.create_task(self._receive_task_handler(self._report_error))
+            await self._connect_websocket()
 
-        if self._websocket and not self._keepalive_task:
-            self._keepalive_task = self.create_task(self._keepalive_task_handler())
+            if self._websocket and not self._receive_task:
+                self._receive_task = self.create_task(self._receive_task_handler(self._report_error))
+
+            if self._websocket and not self._keepalive_task:
+                self._keepalive_task = self.create_task(self._keepalive_task_handler())
 
     async def _disconnect(self):
         """Disconnect from Smallest WebSocket and clean up tasks."""

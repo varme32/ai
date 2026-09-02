@@ -155,6 +155,7 @@ class MurfTTSService(InterruptibleTTSService):
         self._keepalive_task = None
         self._use_http = False
         self._http_session: aiohttp.ClientSession | None = None
+        self._connect_lock = asyncio.Lock()
 
     def can_generate_metrics(self) -> bool:
         return True
@@ -232,7 +233,9 @@ class MurfTTSService(InterruptibleTTSService):
             self._http_session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=None, connect=5, sock_read=30)
             )
-        await self._connect()
+        # Handshake in the background so StartFrame is not blocked on RTT.
+        # run_tts awaits _connect if the socket is not open yet.
+        self.create_task(self._connect())
 
     async def stop(self, frame: EndFrame):
         await super().stop(frame)
@@ -252,12 +255,17 @@ class MurfTTSService(InterruptibleTTSService):
         return await super()._update_settings(delta)
 
     async def _connect(self):
-        await super()._connect()
-        await self._connect_websocket()
-        if self._websocket and not self._receive_task:
-            self._receive_task = self.create_task(self._receive_task_handler(self._report_error))
-        if self._websocket and not self._keepalive_task:
-            self._keepalive_task = self.create_task(self._keepalive_task_handler())
+        async with self._connect_lock:
+            if self._websocket and self._websocket.state is State.OPEN:
+                return
+            await super()._connect()
+            await self._connect_websocket()
+            if self._websocket and not self._receive_task:
+                self._receive_task = self.create_task(
+                    self._receive_task_handler(self._report_error)
+                )
+            if self._websocket and not self._keepalive_task:
+                self._keepalive_task = self.create_task(self._keepalive_task_handler())
 
     async def _disconnect(self):
         await super()._disconnect()

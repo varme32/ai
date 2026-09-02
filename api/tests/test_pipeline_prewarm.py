@@ -110,6 +110,31 @@ async def test_discard_cancels_in_flight_prewarm(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_take_awaits_in_flight_prewarm_instead_of_cancelling(monkeypatch):
+    """Answer-time take must reuse ring-time work, not cancel and rebuild."""
+
+    async def fake_prepare(**_kwargs):
+        await asyncio.sleep(0.05)
+        return _dummy_resources(_kwargs["workflow_run_id"])
+
+    monkeypatch.setattr(
+        "api.services.pipecat.pipeline_prewarm.prepare_pipeline_resources",
+        fake_prepare,
+    )
+
+    kickoff_pipeline_prewarm(
+        workflow_id=1,
+        workflow_run_id=21,
+        organization_id=2,
+        user_id=3,
+        provider_name="vobiz",
+    )
+    resources = await take_pipeline_prewarm(21)
+    assert resources is not None
+    assert resources.merged_call_context_vars["run"] == 21
+
+
+@pytest.mark.asyncio
 async def test_peek_ready_does_not_consume_prewarm(monkeypatch):
     async def fake_prepare(**_kwargs):
         return _dummy_resources(_kwargs["workflow_run_id"])

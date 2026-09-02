@@ -4,6 +4,7 @@ Mounted under ``/api/v1/telephony`` by ``api.routes.telephony`` via the
 provider registry — see ProviderSpec.router.
 """
 
+import asyncio
 import json
 from datetime import UTC, datetime
 
@@ -235,6 +236,16 @@ async def handle_vobiz_ring_callback(
         all_headers,
         raw_body,
         log_prefix=f"[run {workflow_run_id}]",
+    )
+
+    # Use ring time to build STT/TTS/LLM so first speech is not blocked
+    # on that work after answer.
+    kickoff_pipeline_prewarm(
+        workflow_id=workflow_run.workflow_id,
+        workflow_run_id=workflow_run_id,
+        organization_id=workflow.organization_id,
+        user_id=getattr(workflow, "user_id", None),
+        provider_name=provider.PROVIDER_NAME,
     )
 
     # Log the ringing event

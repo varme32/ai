@@ -214,9 +214,14 @@ class SmallestSTTService(WebsocketSTTService):
         return language_to_smallest_stt_language(language)
 
     async def start(self, frame: StartFrame):
-        """Start the service and connect to the WebSocket."""
+        """Start the service and connect to the WebSocket.
+
+        The Smallest handshake is kicked off in the background so StartFrame
+        is not blocked on RTT to the STT server. ``run_stt`` waits on
+        ``_connected_event`` before sending audio.
+        """
         await super().start(frame)
-        await self._connect()
+        self.create_task(self._connect())
 
     async def stop(self, frame: EndFrame):
         """Stop the service and disconnect from the WebSocket."""
@@ -385,6 +390,7 @@ class SmallestSTTService(WebsocketSTTService):
                     time_now_iso8601(),
                     data.get("language"),
                     result=data,
+                    finalized=True,
                 )
             )
         else:
