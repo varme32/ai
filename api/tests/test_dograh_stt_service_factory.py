@@ -61,6 +61,7 @@ def test_create_dograh_multi_uses_flux_service_without_language_hint():
     assert kwargs["correlation_id"] == "corr-123"
     assert kwargs["settings"].model == "flux-general-multi"
     assert kwargs["settings"].language_hints is NOT_GIVEN
+    assert kwargs["settings"].eot_timeout_ms == 800
 
 
 def test_create_dograh_supported_language_uses_flux_service_with_hint():

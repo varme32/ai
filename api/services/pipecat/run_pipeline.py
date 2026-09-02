@@ -29,7 +29,12 @@ from api.services.pipecat.active_calls import (
     unregister_active_call as unregister_worker_active_call,
 )
 from api.services.pipecat.audio_config import AudioConfig, create_audio_config
-from api.services.pipecat.audio_model_warmup import create_silero_vad_analyzer_async
+from api.services.pipecat.audio_model_warmup import (
+    CONVERSATIONAL_VAD_PARAMS,
+    create_silero_vad_analyzer,
+    create_silero_vad_analyzer_async,
+    get_warmed_vad,
+)
 from api.services.pipecat.event_handlers import (
     register_audio_data_handler,
     register_event_handlers,
@@ -79,8 +84,6 @@ from api.services.telephony import registry as telephony_registry
 from api.services.workflow.pipecat_engine import PipecatEngine
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
-from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.extensions.voicemail.voicemail_detector import VoicemailDetector
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMAssistantAggregatorParams,
@@ -215,7 +218,7 @@ def _create_non_realtime_user_turn_stop_strategies(
     return [SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=DEFAULT_SPEECH_TIMEOUT_SECS)]
 
 
-def _create_realtime_user_turn_config(provider: str):
+def _create_realtime_user_turn_config(provider: str, vad_analyzer=None):
     """Return user turn strategies and optional local VAD for realtime providers."""
 
     def external_provider_turn_config():
@@ -228,31 +231,37 @@ def _create_realtime_user_turn_config(provider: str):
         )
 
     def local_vad_turn_config(*, enable_interruptions: bool):
+        # Prefer the prewarmed analyzer, then the process-warmed Silero
+        # session, so Gemini Live does not pay a 300–800 ms ONNX load on
+        # the answer path.
+        analyzer = (
+            vad_analyzer
+            or get_warmed_vad()
+            or create_silero_vad_analyzer(CONVERSATIONAL_VAD_PARAMS)
+        )
         return (
             UserTurnStrategies(
                 start=[
                     VADUserTurnStartStrategy(enable_interruptions=enable_interruptions)
                 ],
-                stop=[SpeechTimeoutUserTurnStopStrategy(wait_for_transcript=False)],
+                stop=[
+                    SpeechTimeoutUserTurnStopStrategy(
+                        wait_for_transcript=False,
+                        user_speech_timeout=DEFAULT_SPEECH_TIMEOUT_SECS,
+                    )
+                ],
             ),
-            SileroVADAnalyzer(params=VADParams(
-                # Hardened for rooms with multiple speakers:
-                # background conversations need to be louder and more sustained
-                # than what the VAD defaults allow before they can interrupt.
-                confidence=0.80,  # Was default 0.7 — less trigger-happy
-                min_volume=0.75,  # Was default 0.6 — ignores quieter bg chatter
-                start_secs=0.25,  # 250 ms for fast natural barge-in
-                stop_secs=0.3,    # 300 ms silence before closing turn (latency optimised)
-            )),
+            analyzer,
         )
 
     if provider in {
         ServiceProviders.GOOGLE_REALTIME.value,
         ServiceProviders.GOOGLE_VERTEX_REALTIME.value,
     }:
-        # Let Gemini Live own barge-in via its server-side VAD, but keep local
-        # Silero VAD for early user-turn start and speaking-state tracking.
-        return local_vad_turn_config(enable_interruptions=False)
+        # Local barge-in must cut already-queued playback immediately.
+        # Gemini's server VAD still owns turn-end; local VAD only stops
+        # audio that has already left the model.
+        return local_vad_turn_config(enable_interruptions=True)
 
     if provider in {
         ServiceProviders.OPENAI_REALTIME.value,
@@ -823,7 +832,8 @@ async def _run_pipeline_impl(
         # Realtime services still need user-turn tracking even when the model
         # itself owns speech generation and interruption behavior.
         user_turn_strategies, user_vad_analyzer = _create_realtime_user_turn_config(
-            user_config.realtime.provider
+            user_config.realtime.provider,
+            vad_analyzer=resources.vad_analyzer,
         )
     else:
         # Some STT services emit their own turn boundaries, so the aggregator

@@ -32,9 +32,20 @@ from api.services.pipecat.run_pipeline import (
     _create_realtime_user_turn_config,
     _resolve_user_turn_stop_timeout,
 )
+from api.services.pipecat.service_factory import _gemini_live_vad_params
 
 
-def test_gemini_realtime_uses_local_vad_without_local_interruptions():
+def test_gemini_live_vad_is_tuned_for_fast_barge_in():
+    from google.genai.types import EndSensitivity, StartSensitivity
+
+    vad = _gemini_live_vad_params()
+    assert vad.start_sensitivity == StartSensitivity.START_SENSITIVITY_HIGH
+    assert vad.end_sensitivity == EndSensitivity.END_SENSITIVITY_HIGH
+    assert vad.prefix_padding_ms == 100
+    assert vad.silence_duration_ms == 400
+
+
+def test_gemini_realtime_uses_local_vad_with_local_interruptions():
     strategies, vad_analyzer = _create_realtime_user_turn_config(
         ServiceProviders.GOOGLE_REALTIME.value
     )
@@ -42,10 +53,13 @@ def test_gemini_realtime_uses_local_vad_without_local_interruptions():
     assert isinstance(vad_analyzer, SileroVADAnalyzer)
     assert len(strategies.start) == 1
     assert isinstance(strategies.start[0], VADUserTurnStartStrategy)
-    assert strategies.start[0]._enable_interruptions is False
+    assert strategies.start[0]._enable_interruptions is True
     assert len(strategies.stop) == 1
     assert isinstance(strategies.stop[0], SpeechTimeoutUserTurnStopStrategy)
     assert strategies.stop[0].wait_for_transcript is False
+    assert strategies.stop[0]._user_speech_timeout == DEFAULT_SPEECH_TIMEOUT_SECS
+    assert vad_analyzer._params.start_secs == 0.15
+    assert vad_analyzer._params.min_volume == 0.6
 
 
 def test_gemini_vertex_realtime_uses_same_turn_config_as_gemini_live():
@@ -56,10 +70,11 @@ def test_gemini_vertex_realtime_uses_same_turn_config_as_gemini_live():
     assert isinstance(vad_analyzer, SileroVADAnalyzer)
     assert len(strategies.start) == 1
     assert isinstance(strategies.start[0], VADUserTurnStartStrategy)
-    assert strategies.start[0]._enable_interruptions is False
+    assert strategies.start[0]._enable_interruptions is True
     assert len(strategies.stop) == 1
     assert isinstance(strategies.stop[0], SpeechTimeoutUserTurnStopStrategy)
     assert strategies.stop[0].wait_for_transcript is False
+    assert strategies.stop[0]._user_speech_timeout == DEFAULT_SPEECH_TIMEOUT_SECS
 
 
 def test_openai_realtime_uses_provider_turn_frames_without_local_vad():

@@ -19,35 +19,24 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 # Module-level singleton — set once during startup warmup
 _warmed_vad: SileroVADAnalyzer | None = None
 
-# ---------------------------------------------------------------------------
-# Hardened VAD params for enterprise deployments (rooms with multiple speakers).
+# Conversational VAD for phone calls and near-field mics.
 #
-# Problem: Silero VAD defaults (confidence=0.7, min_volume=0.6, start_secs=0.2)
-# are tuned for near-field microphones. In a room with multiple speakers,
-# background conversations easily exceed these thresholds and fire a
-# UserStartedSpeakingFrame, which interrupts the AI mid-sentence.
+# Previous "enterprise" thresholds (confidence=0.80, min_volume=0.75,
+# start_secs=0.25) were tuned for a loud room with multiple speakers.
+# On 8 kHz PSTN those values miss barge-in (the caller is too quiet)
+# and add hundreds of ms before a turn is even considered started.
 #
-# Fix: Raise all four thresholds so only the primary speaker (who is close
-# to and directly addressing the microphone) can trigger a turn change:
-#   confidence=0.80  — needs 80% model confidence (vs 70% default)
-#   min_volume=0.75  — requires louder, close-field audio (vs 0.6 default)
-#   start_secs=0.4   — needs 400 ms of sustained speech (vs 200 ms default)
-#   stop_secs=0.5    — waits 500 ms of silence before closing a turn (vs 200 ms)
-# ---------------------------------------------------------------------------
-ENTERPRISE_VAD_PARAMS = VADParams(
-    confidence=0.80,
-    min_volume=0.75,
-    # start_secs=0.25: 250 ms of sustained speech to confirm a new turn.
-    # Was 0.4 s — too slow for barge-in: user speaks for 400 ms before the
-    # AI shuts up. 250 ms is fast enough for natural interruptions while
-    # still filtering single-word background utterances.
-    start_secs=0.25,
-    # stop_secs=0.3: 300 ms silence to confirm speech has ended.
-    # Was 0.5 s — added 200 ms of unnecessary dead time before the LLM
-    # could start. 0.3 s still covers Telugu inter-syllable pauses
-    # without cutting off geminate consonants.
-    stop_secs=0.3,
+# These sit at Pipecat's defaults for confidence/volume, with a slightly
+# shorter start window so the bot yields quickly, and a 250 ms stop
+# window so Telugu geminates are not cut mid-word.
+CONVERSATIONAL_VAD_PARAMS = VADParams(
+    confidence=0.7,
+    min_volume=0.6,
+    start_secs=0.15,
+    stop_secs=0.25,
 )
+# Kept as an alias so existing imports keep working.
+ENTERPRISE_VAD_PARAMS = CONVERSATIONAL_VAD_PARAMS
 
 
 def create_silero_vad_analyzer(

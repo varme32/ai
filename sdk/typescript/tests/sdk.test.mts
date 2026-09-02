@@ -49,7 +49,7 @@ const SPECS: Record<string, NodeSpec> = {
                 type: "boolean",
                 display_name: "Allow Interrupt",
                 description: "a",
-                default: false,
+                default: true,
             },
             {
                 name: "greeting_type",
@@ -175,7 +175,7 @@ describe("Workflow builder", () => {
             prompt: "hi",
         });
         const data = wf.toJson().nodes[0]!.data;
-        assert.equal(data.allow_interrupt, false);
+        assert.equal(data.allow_interrupt, true);
         assert.equal(data.greeting_type, "text");
         assert.ok(start.id);
     });

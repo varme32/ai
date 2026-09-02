@@ -110,7 +110,7 @@ class _PromptedNodeDataMixin(BaseModel):
         min_length=1,
     )
     allow_interrupt: bool = spec_field(
-        default=False,
+        default=True,
         ui_type=PropertyType.boolean,
         display_name="Allow Interruption",
         description="When true, the user can interrupt the agent mid-utterance.",
@@ -267,6 +267,7 @@ class _ToolDocumentRefsMixin(BaseModel):
         },
         "allow_interrupt": {
             "description": "When true, the user can interrupt the agent mid-utterance.",
+            "spec_default": True,
         },
         "tool_uuids": {
             "description": "Tools the agent can invoke during the opening turn.",

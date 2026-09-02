@@ -56,7 +56,7 @@ Each node represents a step in the conversation.
 |---|---|---|---|
 | `name` | string | required | Display name for the node |
 | `prompt` | string | required* | LLM system prompt. *Not required for `trigger`, `webhook`, `qa` nodes |
-| `allow_interrupt` | boolean | `false` | Allow the caller to interrupt the agent mid-speech |
+| `allow_interrupt` | boolean | `true` | Allow the caller to interrupt the agent mid-speech |
 | `wait_for_user_response` | boolean | `false` | Pause and wait for caller input before continuing |
 | `wait_for_user_response_timeout` | number | `null` | Seconds to wait for input before timing out |
 | `detect_voicemail` | boolean | `false` | Detect and handle voicemail on outbound calls |

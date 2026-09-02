@@ -9,9 +9,9 @@ into the same place.
 # Pipecat's TransportParams default is 3s. While the TTS queue is empty
 # (waiting on the next LLM sentence) that timeout is how long the bot is
 # still considered "speaking", which mutes the user and sounds like a
-# pause-then-play glitch. 0.5s is enough for a real TTS gap without a
-# multi-second hole on every sentence boundary.
-CALL_BOT_VAD_STOP_SECS = 0.5
+# pause-then-play glitch. 0.25s covers a real TTS gap without holding
+# the "bot is speaking" mute for half a second after every sentence.
+CALL_BOT_VAD_STOP_SECS = 0.25
 # Kept as an alias so existing realtime imports keep working.
 REALTIME_BOT_VAD_STOP_SECS = CALL_BOT_VAD_STOP_SECS
 

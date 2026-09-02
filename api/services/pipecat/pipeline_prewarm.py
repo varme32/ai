@@ -317,8 +317,15 @@ async def prepare_pipeline_resources(
             user_config,
             correlation_id=None,  # MPS id resolved below
         )
-        vad_task = None
-        _prewarmed_vad = None  # Realtime path never uses VAD
+        # Gemini Live still uses local Silero for barge-in. Warm it here
+        # so answer does not pay the ONNX load.
+        _prewarmed = get_warmed_vad()
+        if _prewarmed is not None:
+            vad_task = None
+            _prewarmed_vad = _prewarmed
+        else:
+            vad_task = asyncio.create_task(create_silero_vad_analyzer_async())
+            _prewarmed_vad = None
         # Run MPS correlation lookup in parallel — does not block service creation
 
         mps_task = asyncio.create_task(
@@ -420,7 +427,7 @@ async def prepare_pipeline_resources(
     if vad_task is not None:
         # Task was launched because no warmed singleton was available
         vad_analyzer = await vad_task
-    elif not is_realtime and _prewarmed_vad is not None:
+    elif _prewarmed_vad is not None:
         # Reuse the pre-warmed singleton — no ONNX load needed
         vad_analyzer = _prewarmed_vad
     else:
