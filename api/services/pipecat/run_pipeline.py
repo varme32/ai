@@ -235,7 +235,15 @@ def _create_realtime_user_turn_config(provider: str):
                 ],
                 stop=[SpeechTimeoutUserTurnStopStrategy(wait_for_transcript=False)],
             ),
-            SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
+            SileroVADAnalyzer(params=VADParams(
+                # Hardened for rooms with multiple speakers:
+                # background conversations need to be louder and more sustained
+                # than what the VAD defaults allow before they can interrupt.
+                confidence=0.80,  # Was default 0.7 — less trigger-happy
+                min_volume=0.75,  # Was default 0.6 — ignores quieter bg chatter
+                start_secs=0.4,   # Was 0.2 — needs 400 ms sustained speech
+                stop_secs=0.5,    # Was 0.2 — waits 500 ms silence before close
+            )),
         )
 
     if provider in {

@@ -287,12 +287,11 @@ def create_stt_service(
             settings=DeepgramSTTSettings(
                 language=language,
                 profanity_filter=False,
-                # 300 ms endpointing: minimum silence before Deepgram finalises
-                # a transcript. 50 ms (old value) was too aggressive for 8 kHz
-                # phone audio — line static constantly tripped it, fragmenting
-                # natural speech into micro-turns. 300 ms matches typical
-                # natural-speech pause expectations on PSTN calls.
-                endpointing=300,
+                # 500 ms endpointing: raised from 300 ms to give Telugu speakers
+                # time to complete inter-word pauses without fragmenting utterances.
+                # Telugu has longer natural gaps between words than English, and the
+                # default 300 ms caused transcripts to be split mid-sentence on PSTN.
+                endpointing=500,
                 model=user_config.stt.model,
                 keyterm=keyterms or [],
             ),
@@ -1164,6 +1163,37 @@ def create_realtime_llm_service(user_config, audio_config: "AudioConfig"):
         }
         if language:
             settings_kwargs["language"] = language
+        from pipecat.services.google.gemini_live.llm import GeminiVADParams
+        from google.genai.types import EndSensitivity, StartSensitivity
+
+        # Enterprise VAD configuration for Gemini Live:
+        #
+        # Background noise / multiple speakers in a room:
+        #   start_sensitivity=LOW  — Gemini won't fire a turn-start on brief or
+        #                            quiet background voices; needs a clear,
+        #                            sustained speech signal to begin a turn.
+        #   end_sensitivity=LOW    — Gemini waits longer after silence before
+        #                            closing the turn, reducing mid-sentence cuts.
+        #   prefix_padding_ms=300  — Requires 300 ms of confirmed speech before
+        #                            the turn is considered started, ignoring short
+        #                            background utterances.
+        #
+        # Telugu naturalness:
+        #   silence_duration_ms=700 — Telugu has longer inter-syllable and
+        #                             inter-word pauses than English, and geminate
+        #                             consonants (e.g. అమ్మ, అక్క) can look like
+        #                             a brief silence mid-word. 700 ms prevents
+        #                             Gemini from ending the turn mid-word.
+        #                             (Adds ~100 ms latency vs English default;
+        #                             correct trade-off for natural Telugu speech.)
+        vad_params = GeminiVADParams(
+            start_sensitivity=StartSensitivity.START_SENSITIVITY_LOW,
+            end_sensitivity=EndSensitivity.END_SENSITIVITY_LOW,
+            prefix_padding_ms=300,
+            silence_duration_ms=700,
+        )
+        settings_kwargs["vad"] = vad_params
+
         from api.services.pipecat.google_client_options import google_retry_http_options
 
         return DograhGeminiLiveLLMService(

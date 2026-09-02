@@ -8,7 +8,7 @@ DEFAULT_MAX_CALL_DURATION_SECONDS = 300
 # its slot purged as stale and the org concurrency limit under-counts.
 MAX_CALL_DURATION_SECONDS = 1200
 DEFAULT_MAX_USER_IDLE_TIMEOUT_SECONDS = 10.0
-DEFAULT_SMART_TURN_STOP_SECS = 2.0
+DEFAULT_SMART_TURN_STOP_SECS = 1.5
 DEFAULT_TURN_START_STRATEGY = "default"
 DEFAULT_TURN_START_MIN_WORDS = 3
 # Minimum words required before triggering a user turn on the default
@@ -19,15 +19,16 @@ DEFAULT_TURN_START_MIN_WORDS = 3
 #   - automatically reduces to 1-word when the bot is NOT speaking
 #     (MinWordsUserTurnStartStrategy built-in behaviour)
 DEFAULT_TURN_START_MIN_WORDS_TELEPHONY = 3
-DEFAULT_PROVISIONAL_VAD_PAUSE_SECS = 1.5
+DEFAULT_PROVISIONAL_VAD_PAUSE_SECS = 1.2
 DEFAULT_TURN_STOP_STRATEGY = "transcription"
 DEFAULT_CONTEXT_COMPACTION_ENABLED = False
 # Silence duration (seconds) the pipeline waits after the last speech
-# frame before closing a user turn. 0.6 s is a balance between:
-#   - not splitting short answers ("Apartment", "Jubilee Hills") into
-#     multiple turns (too short = duplicate LLM calls)
+# frame before closing a user turn. 0.8 s is a balance between:
+#   - not splitting short answers into multiple turns (too short = duplicate LLM calls)
 #   - not adding too much dead air before the LLM starts (too long = unnatural pause)
-DEFAULT_SPEECH_TIMEOUT_SECS = 0.6
+# Raised from 0.6 s to 0.8 s for Telugu: the language has longer inter-syllable
+# pauses and geminate consonants that can look like a brief silence mid-word.
+DEFAULT_SPEECH_TIMEOUT_SECS = 0.8
 
 
 class ExternalPBXFieldMapping(BaseModel):

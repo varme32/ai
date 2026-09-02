@@ -18,7 +18,11 @@ class DograhSarvamSTTService(SarvamSTTService):
     pass through exactly as the base class would deliver them.
     """
 
-    MIN_LANGUAGE_PROBABILITY = 0.4
+    # Lowered from 0.4 to 0.30: on 8 kHz PSTN audio, Sarvam often returns
+    # legitimate Telugu utterances with 35–45% confidence because the model
+    # is ambiguous between Telugu and Kannada (closely related scripts/phonology).
+    # The previous 0.4 threshold was silently dropping real user speech.
+    MIN_LANGUAGE_PROBABILITY = 0.30
 
     async def _handle_message(self, message):
         """Override to apply language-confidence gate before emitting frames."""
@@ -48,7 +52,7 @@ class DograhSarvamSTTService(SarvamSTTService):
                 )
 
                 if language_probability < self.MIN_LANGUAGE_PROBABILITY:
-                    logger.debug(
+                    logger.warning(
                         f"DograhSarvamSTTService: discarding low-confidence transcript "
                         f"(language_probability={language_probability:.3f} "
                         f"< {self.MIN_LANGUAGE_PROBABILITY}): "
