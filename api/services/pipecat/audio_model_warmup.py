@@ -37,8 +37,16 @@ _warmed_vad: SileroVADAnalyzer | None = None
 ENTERPRISE_VAD_PARAMS = VADParams(
     confidence=0.80,
     min_volume=0.75,
-    start_secs=0.4,
-    stop_secs=0.5,
+    # start_secs=0.25: 250 ms of sustained speech to confirm a new turn.
+    # Was 0.4 s — too slow for barge-in: user speaks for 400 ms before the
+    # AI shuts up. 250 ms is fast enough for natural interruptions while
+    # still filtering single-word background utterances.
+    start_secs=0.25,
+    # stop_secs=0.3: 300 ms silence to confirm speech has ended.
+    # Was 0.5 s — added 200 ms of unnecessary dead time before the LLM
+    # could start. 0.3 s still covers Telugu inter-syllable pauses
+    # without cutting off geminate consonants.
+    stop_secs=0.3,
 )
 
 

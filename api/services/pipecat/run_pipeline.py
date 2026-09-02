@@ -241,8 +241,8 @@ def _create_realtime_user_turn_config(provider: str):
                 # than what the VAD defaults allow before they can interrupt.
                 confidence=0.80,  # Was default 0.7 — less trigger-happy
                 min_volume=0.75,  # Was default 0.6 — ignores quieter bg chatter
-                start_secs=0.4,   # Was 0.2 — needs 400 ms sustained speech
-                stop_secs=0.5,    # Was 0.2 — waits 500 ms silence before close
+                start_secs=0.25,  # 250 ms for fast natural barge-in
+                stop_secs=0.3,    # 300 ms silence before closing turn (latency optimised)
             )),
         )
 

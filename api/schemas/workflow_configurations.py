@@ -23,12 +23,13 @@ DEFAULT_PROVISIONAL_VAD_PAUSE_SECS = 1.2
 DEFAULT_TURN_STOP_STRATEGY = "transcription"
 DEFAULT_CONTEXT_COMPACTION_ENABLED = False
 # Silence duration (seconds) the pipeline waits after the last speech
-# frame before closing a user turn. 0.8 s is a balance between:
-#   - not splitting short answers into multiple turns (too short = duplicate LLM calls)
-#   - not adding too much dead air before the LLM starts (too long = unnatural pause)
-# Raised from 0.6 s to 0.8 s for Telugu: the language has longer inter-syllable
-# pauses and geminate consonants that can look like a brief silence mid-word.
-DEFAULT_SPEECH_TIMEOUT_SECS = 0.8
+# frame before closing a user turn. 0.5 s balances:
+#   - not splitting answers into multiple turns (too short = duplicate LLM calls)
+#   - not adding dead air before the LLM starts (too long = sluggish feel)
+# Tuned down from 0.8 s to 0.5 s: VAD stop_secs already handles Telugu
+# inter-syllable pauses at the signal level; this timeout is the
+# application-level gate on top and was doubling the wait unnecessarily.
+DEFAULT_SPEECH_TIMEOUT_SECS = 0.5
 
 
 class ExternalPBXFieldMapping(BaseModel):
