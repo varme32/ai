@@ -20,7 +20,9 @@ from api.services.configuration.masking import contains_masked_key
 from api.services.configuration.options.sarvam import (
     SARVAM_LANGUAGES,
     SARVAM_V2_VOICE_CATALOG,
+    SARVAM_V2_VOICES,
     SARVAM_V3_VOICE_CATALOG,
+    SARVAM_V3_VOICES,
 )
 from api.services.configuration.options.smallest import SMALLEST_LANGUAGE_NAME_TO_ISO
 
@@ -36,10 +38,25 @@ MURF_GENERATE_URLS = (
     "https://api.murf.ai/v1/speech/generate",
 )
 SMALLEST_VOICES_URL = "https://api.india.smallest.ai/waves/v1/{model}/get_voices"
-SMALLEST_SPEECH_URL = (
-    "https://api.india.smallest.ai/waves/v1/{model}/get_speech"
+SMALLEST_SPEECH_URLS = (
+    "https://api.india.smallest.ai/waves/v1/{model}/get_speech",
+    "https://api.smallest.ai/waves/v1/{model}/get_speech",
+    "https://api.smallest.ai/waves/v1/tts",
 )
 SARVAM_TTS_URL = "https://api.sarvam.ai/text-to-speech"
+SARVAM_TTS_LANGUAGES = (
+    "bn-IN",
+    "en-IN",
+    "gu-IN",
+    "hi-IN",
+    "kn-IN",
+    "ml-IN",
+    "mr-IN",
+    "od-IN",
+    "pa-IN",
+    "ta-IN",
+    "te-IN",
+)
 
 # Always expose these in the picker so Telugu (and other Indian languages)
 # appear even when a provider tags voices as Hindi/English only.
@@ -306,6 +323,58 @@ async def _download_allowed_preview(url: str | None) -> tuple[bytes, str] | None
 def _preview_text(language: str | None) -> str:
     canonical = canonicalize_language(language) or "en-IN"
     return _PREVIEW_TEXT.get(canonical) or _PREVIEW_TEXT["en-IN"]
+
+
+def _sarvam_tts_language(language: str | None) -> str:
+    canonical = canonicalize_language(language) or "hi-IN"
+    if canonical in SARVAM_TTS_LANGUAGES:
+        return canonical
+    if canonical.split("-")[0] == "en":
+        return "en-IN"
+    return "hi-IN"
+
+
+def _sarvam_tts_model(voice_id: str, model: str | None) -> str:
+    speaker = (voice_id or "").strip().lower()
+    requested = (model or "").strip().lower()
+    if speaker in SARVAM_V2_VOICES:
+        return "bulbul:v2"
+    if speaker in SARVAM_V3_VOICES:
+        return "bulbul:v3" if requested != "bulbul:v2" else "bulbul:v3"
+    return requested if requested in {"bulbul:v2", "bulbul:v3"} else "bulbul:v3"
+
+
+def _smallest_language(language: str | None) -> str:
+    canonical = canonicalize_language(language)
+    if not canonical:
+        return "auto"
+    code = canonical.split("-")[0].lower()
+    if code in {
+        "en", "hi", "te", "ta", "kn", "ml", "mr", "gu", "bn", "pa", "or", "es", "fr",
+    }:
+        return code
+    return "auto"
+
+
+def _provider_error_detail(status: int, body: str, fallback: str) -> str:
+    text = (body or "").strip()
+    if not text:
+        return f"{fallback} ({status})."
+    try:
+        payload = __import__("json").loads(text)
+        if isinstance(payload, dict):
+            error = payload.get("error")
+            if isinstance(error, dict) and error.get("message"):
+                return str(error["message"])
+            if payload.get("error_message"):
+                return str(payload["error_message"])
+            if payload.get("message"):
+                return str(payload["message"])
+            if payload.get("detail"):
+                return str(payload["detail"])
+    except Exception:
+        pass
+    return f"{fallback} ({status}): {text[:180]}"
 
 
 async def _download_audio(url: str) -> tuple[bytes, str] | None:
@@ -932,12 +1001,14 @@ async def _preview_sarvam(
             status_code=400,
             detail="Add a Sarvam API key to play a voice sample.",
         )
-    target_language = canonicalize_language(language) or "hi-IN"
+    speaker = (voice_id or "").strip().lower()
+    target_language = _sarvam_tts_language(language)
     payload = {
         "text": _preview_text(target_language),
-        "target_language_code": target_language if "-" in target_language else "hi-IN",
-        "speaker": (voice_id or "").strip().lower(),
-        "model": model or "bulbul:v3",
+        "language_code": target_language,
+        "target_language_code": target_language,
+        "speaker": speaker,
+        "model": _sarvam_tts_model(speaker, model),
     }
     headers = {
         "api-subscription-key": api_key,
@@ -955,7 +1026,9 @@ async def _preview_sarvam(
                     body = await resp.text()
                     raise HTTPException(
                         status_code=502,
-                        detail=f"Could not play this sample ({resp.status}).",
+                        detail=_provider_error_detail(
+                            resp.status, body, "Could not play this Sarvam sample"
+                        ),
                     )
                 data = await resp.json()
     except aiohttp.ClientError as exc:
@@ -965,7 +1038,10 @@ async def _preview_sarvam(
     audios = data.get("audios") if isinstance(data, dict) else None
     if not audios:
         raise HTTPException(status_code=502, detail="Sarvam preview returned no audio")
-    return base64.b64decode(audios[0]), "audio/wav"
+    audio_b64 = audios[0]
+    if isinstance(audio_b64, dict):
+        audio_b64 = audio_b64.get("audio") or audio_b64.get("data") or ""
+    return base64.b64decode(audio_b64), "audio/wav"
 
 
 async def _preview_cartesia(
@@ -1055,21 +1131,27 @@ async def _preview_murf(
     language: str | None,
     api_key_override: str | None,
 ) -> tuple[bytes, str]:
+    import base64
+
     api_key = await resolve_tts_api_key(
         organization_id=organization_id,
         provider="murf",
         api_key_override=api_key_override,
     )
-    headers = {"Accept": "application/json"}
-    if api_key:
-        headers["api-key"] = api_key
+    if not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Add a Murf API key to play a voice sample.",
+        )
+    headers = {"Accept": "application/json", "api-key": api_key}
+    locale = canonicalize_language(language) or _locale_from_voice_id(voice_id)
     payload = {
-        "text": _preview_text(language),
+        "text": _preview_text(locale),
         "voiceId": voice_id,
         "format": "MP3",
-        "model": "falcon-2" if not model or "falcon" in model.lower() else "gen2",
+        "modelVersion": "GEN2",
+        "encodeAsBase64": True,
     }
-    locale = canonicalize_language(language)
     if locale:
         payload["locale"] = locale
     last_error = ""
@@ -1089,6 +1171,9 @@ async def _preview_murf(
                     if content_type.startswith("audio/"):
                         return await resp.read(), content_type
                     data = await resp.json()
+                    encoded = data.get("encodedAudio") or data.get("encoded_audio")
+                    if encoded:
+                        return base64.b64decode(encoded), "audio/mpeg"
                     audio_url = data.get("audioFile") or data.get("audio_file")
                     if audio_url:
                         downloaded = await _download_audio(audio_url)
@@ -1100,7 +1185,7 @@ async def _preview_murf(
         ) from exc
     raise HTTPException(
         status_code=502,
-        detail=f"Could not play this Murf sample. {last_error[:160]}".strip(),
+        detail=_provider_error_detail(502, last_error, "Could not play this Murf sample"),
     )
 
 
@@ -1112,55 +1197,75 @@ async def _preview_smallest(
     language: str | None,
     api_key_override: str | None,
 ) -> tuple[bytes, str]:
+    import base64
+    import json
+
     api_key = await resolve_tts_api_key(
         organization_id=organization_id,
         provider="smallest",
         api_key_override=api_key_override,
     )
+    if not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Add a Smallest API key to play a voice sample.",
+        )
     resolved_model = (model or "lightning_v3.1").replace("-", "_")
+    if resolved_model not in {"lightning_v3.1", "lightning_v3.1_pro"}:
+        resolved_model = "lightning_v3.1"
     model_slug = resolved_model.replace("_", "-")
-    lang = canonicalize_language(language) or "en"
-    lang = lang.split("-")[0]
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+    lang = _smallest_language(language)
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "audio/wav",
+        "Content-Type": "application/json",
+    }
     payload = {
         "text": _preview_text(language),
         "voice_id": voice_id,
         "language": lang,
+        "sample_rate": 24000,
+        "output_format": "wav",
+        "model": resolved_model,
     }
-    url = SMALLEST_SPEECH_URL.format(model=model_slug)
+    last_error = ""
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                headers=headers,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=20),
-            ) as resp:
-                if resp.status != 200:
-                    raise HTTPException(
-                        status_code=502,
-                        detail="Could not play this Smallest sample.",
-                    )
-                content_type = (resp.headers.get("Content-Type") or "").split(";")[0]
-                if content_type.startswith("audio/"):
-                    return await resp.read(), content_type
-                data = await resp.json()
+            for template in SMALLEST_SPEECH_URLS:
+                url = template.format(model=model_slug)
+                async with session.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as resp:
+                    if resp.status != 200:
+                        last_error = await resp.text()
+                        continue
+                    content_type = (
+                        resp.headers.get("Content-Type") or "audio/wav"
+                    ).split(";")[0]
+                    raw = await resp.read()
+                    if content_type.startswith("audio/") or not raw.lstrip().startswith(
+                        b"{"
+                    ):
+                        return raw, content_type if content_type.startswith("audio/") else "audio/wav"
+                    data = json.loads(raw)
+                    audio_b64 = data.get("audio") or data.get("data")
+                    audio_url = data.get("url") or data.get("previewUrl")
+                    if audio_url:
+                        downloaded = await _download_audio(audio_url)
+                        if downloaded:
+                            return downloaded
+                    if audio_b64:
+                        return base64.b64decode(audio_b64), "audio/wav"
     except aiohttp.ClientError as exc:
         raise HTTPException(
             status_code=502, detail=f"Failed to contact Smallest AI API: {exc}"
         ) from exc
-    import base64
-
-    audio_b64 = None
-    if isinstance(data, dict):
-        audio_b64 = data.get("audio") or data.get("data")
-        audio_url = data.get("url") or data.get("previewUrl")
-        if audio_url:
-            downloaded = await _download_audio(audio_url)
-            if downloaded:
-                return downloaded
-    if not audio_b64:
-        raise HTTPException(status_code=502, detail="Smallest preview returned no audio")
-    return base64.b64decode(audio_b64), "audio/wav"
+    raise HTTPException(
+        status_code=502,
+        detail=_provider_error_detail(
+            502, last_error, "Could not play this Smallest sample"
+        ),
+    )

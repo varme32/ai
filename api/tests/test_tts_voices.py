@@ -3,6 +3,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from api.services.configuration.options.sarvam import SARVAM_V3_VOICE_CATALOG
 from api.services.configuration.tts_voices import (
+    _preview_murf,
+    _preview_sarvam,
+    _preview_smallest,
     list_cartesia_voices,
     list_murf_voices,
     list_sarvam_voices,
@@ -39,6 +42,7 @@ class _FakeSession:
     def __init__(self, responses):
         self._responses = list(responses)
         self.urls = []
+        self.payloads = []
 
     async def __aenter__(self):
         return self
@@ -48,6 +52,13 @@ class _FakeSession:
 
     def get(self, url, **kwargs):
         self.urls.append(url)
+        if not self._responses:
+            return _FakeResponse(500, {}, "no more responses")
+        return self._responses.pop(0)
+
+    def post(self, url, **kwargs):
+        self.urls.append(url)
+        self.payloads.append(kwargs.get("json"))
         if not self._responses:
             return _FakeResponse(500, {}, "no more responses")
         return self._responses.pop(0)
@@ -385,3 +396,97 @@ async def test_preview_plays_the_catalog_sample_clip():
         )
     assert data == audio
     assert content_type == "audio/wav"
+
+
+@pytest.mark.asyncio
+async def test_sarvam_preview_sends_language_code_and_matching_model():
+    session = _FakeSession(
+        [_FakeResponse(200, {"audios": ["UklGRg=="]}, headers={"Content-Type": "application/json"})]
+    )
+    with (
+        patch(
+            "api.services.configuration.tts_voices.resolve_tts_api_key",
+            new=AsyncMock(return_value="sarvam-key"),
+        ),
+        patch("aiohttp.ClientSession", return_value=session),
+    ):
+        audio, content_type = await _preview_sarvam(
+            voice_id="shubh",
+            organization_id=1,
+            model="bulbul:v3",
+            language="te-IN",
+            api_key_override="sarvam-key",
+        )
+    assert content_type == "audio/wav"
+    assert audio
+    payload = session.payloads[0]
+    assert payload["language_code"] == "te-IN"
+    assert payload["speaker"] == "shubh"
+    assert payload["model"] == "bulbul:v3"
+
+
+@pytest.mark.asyncio
+async def test_murf_preview_uses_model_version_not_model():
+    session = _FakeSession(
+        [
+            _FakeResponse(
+                200,
+                {"encodedAudio": "UklGRg==", "audioFile": "https://cdn.murf.ai/x.mp3"},
+                headers={"Content-Type": "application/json"},
+            )
+        ]
+    )
+    with (
+        patch(
+            "api.services.configuration.tts_voices.resolve_tts_api_key",
+            new=AsyncMock(return_value="murf-key"),
+        ),
+        patch("aiohttp.ClientSession", return_value=session),
+    ):
+        await _preview_murf(
+            voice_id="te-IN-ananya",
+            organization_id=1,
+            model="falcon-2",
+            language="te-IN",
+            api_key_override="murf-key",
+        )
+    payload = session.payloads[0]
+    assert "model" not in payload
+    assert payload["modelVersion"] == "GEN2"
+    assert payload["voiceId"] == "te-IN-ananya"
+    assert payload["locale"] == "te-IN"
+
+
+@pytest.mark.asyncio
+async def test_smallest_preview_requests_wav_from_india_then_global():
+    session = _FakeSession(
+        [
+            _FakeResponse(404, {}, text="not found"),
+            _FakeResponse(
+                200,
+                {},
+                body=b"RIFF....wav",
+                headers={"Content-Type": "audio/wav"},
+            ),
+        ]
+    )
+    with (
+        patch(
+            "api.services.configuration.tts_voices.resolve_tts_api_key",
+            new=AsyncMock(return_value="smallest-key"),
+        ),
+        patch("aiohttp.ClientSession", return_value=session),
+    ):
+        audio, content_type = await _preview_smallest(
+            voice_id="sridhar",
+            organization_id=1,
+            model="lightning_v3.1",
+            language="te-IN",
+            api_key_override="smallest-key",
+        )
+    assert audio.startswith(b"RIFF")
+    assert content_type == "audio/wav"
+    assert session.payloads[0]["output_format"] == "wav"
+    assert session.payloads[0]["language"] == "te"
+    assert "api.india.smallest.ai" in session.urls[0]
+    assert "api.smallest.ai" in session.urls[1]
