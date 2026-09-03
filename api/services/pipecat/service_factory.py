@@ -71,6 +71,13 @@ from pipecat.services.inworld.tts import InworldTTSService, InworldTTSSettings
 from pipecat.services.minimax.llm import MiniMaxLLMService
 from pipecat.services.minimax.tts import MiniMaxTTSSettings
 from pipecat.services.openai._constants import OPENAI_SAMPLE_RATE
+
+# Cartesia's vocoder is optimized for 24 kHz output.  Requesting the
+# transport rate (e.g. 16 kHz for WebRTC) forces a lower-quality synthesis
+# path that sounds noticeably different from the Cartesia website preview.
+# We always ask Cartesia for 24 kHz and let base_output.py resample to the
+# wire rate (16 kHz WebRTC, 8 kHz telephony).
+CARTESIA_SAMPLE_RATE = 24000
 from pipecat.services.openai.base_llm import OpenAILLMSettings
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.openai.stt import (
@@ -104,11 +111,13 @@ if TYPE_CHECKING:
 
 
 def _tts_wire_sample_rate(audio_config) -> int:
-    """Sample rate to request from the TTS provider.
+    """Sample rate to request from generic (non-Cartesia, non-OpenAI) TTS providers.
 
-    Exotel/Twilio are 8 kHz on the wire. Cartesia's pcm_s16le vocoder is
-    designed for 16 kHz+, not 8 kHz — native 8 kHz Cartesia Telugu is
-    unintelligible. Request 16 kHz and let the transport resample to 8 kHz.
+    Exotel/Twilio are 8 kHz on the wire. Request 16 kHz from the TTS provider
+    and let the transport resample to 8 kHz for better quality.
+
+    Cartesia and OpenAI use their own dedicated constants (CARTESIA_SAMPLE_RATE,
+    OPENAI_SAMPLE_RATE) so they always generate at their native optimal rate.
     """
     transport = int(
         getattr(audio_config, "transport_out_sample_rate", None)
@@ -683,8 +692,14 @@ def create_tts_service(
             cartesia_language = language
         logger.info(
             f"Cartesia TTS language={language} voice={user_config.tts.voice} "
-            f"sample_rate={_tts_wire_sample_rate(audio_config)}"
+            f"sample_rate={CARTESIA_SAMPLE_RATE} (transport={_tts_wire_sample_rate(audio_config)})"
         )
+        tts_runtime = _tts_runtime_kwargs(xml_function_tag_filter, audio_config)
+        # Always generate at Cartesia's optimal 24 kHz regardless of transport
+        # rate. base_output.py resamples 24 kHz → 16 kHz (WebRTC) or 8 kHz
+        # (telephony) transparently. This matches what the Cartesia website uses
+        # for voice previews and produces significantly better voice quality.
+        tts_runtime["sample_rate"] = CARTESIA_SAMPLE_RATE
         return DograhCartesiaTTSService(
             api_key=user_config.tts.api_key,
             settings=CartesiaTTSSettings(
@@ -697,7 +712,7 @@ def create_tts_service(
                     else {}
                 ),
             ),
-            **_tts_runtime_kwargs(xml_function_tag_filter, audio_config),
+            **tts_runtime,
         )
     elif user_config.tts.provider == ServiceProviders.INWORLD.value:
         voice = getattr(user_config.tts, "voice", None) or "Ashley"
