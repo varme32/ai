@@ -16,6 +16,7 @@ from api.services.pipecat.gemini_json_schema_adapter import (
 )
 from api.services.pipecat.cartesia_tts import DograhCartesiaTTSService
 from api.services.pipecat.minimax_tts import MiniMaxOwnedSessionTTSService
+from api.services.pipecat.smallest_tts import DograhSmallestTTSService
 from api.services.pipecat.tts_language import resolve_tts_language
 from api.services.pipecat.voice_runtime import (
     resolve_realtime_vad_ms,
@@ -883,7 +884,7 @@ def create_tts_service(
             getattr(user_config.tts, "base_url", None)
             or "wss://api.india.smallest.ai"
         )
-        return SmallestTTSService(
+        return DograhSmallestTTSService(
             api_key=user_config.tts.api_key,
             base_url=base_url,
             settings=settings_kwargs,

@@ -3,6 +3,12 @@
 Placed here (instead of the pipecat submodule) so the Docker build does not
 require pushing changes to an external pipecat fork.
 """
+# Per-utterance language detection is applied in _build_text_msg and
+# _stream_http_tts via _resolve_utterance_locale(), which overrides the
+# session-level language setting for non-Indic (English) text.  Without this,
+# English words were synthesised through Telugu/Hindi phoneme tables when the
+# Murf voice was configured for an Indic language, making all voices sound
+# identical and speech sound rushed or at 2x speed.
 
 import asyncio
 import base64
@@ -14,6 +20,8 @@ from urllib.parse import urlencode
 
 import aiohttp
 from loguru import logger
+
+from api.services.pipecat.tts_language import language_from_script
 from websockets.asyncio.client import connect as websocket_connect
 from websockets.protocol import State
 
@@ -100,6 +108,34 @@ def _pcm_without_wav_header(audio: bytes) -> bytes:
     if len(audio) > 44 and audio[:4] == b"RIFF":
         return audio[44:]
     return audio
+
+
+# Map short script-detection codes → Murf locale strings
+_MURF_INDIC_LOCALE_MAP: dict[str, str] = {
+    "te": "te-IN",
+    "hi": "hi-IN",
+    "ta": "ta-IN",
+    "kn": "kn-IN",
+    "ml": "ml-IN",
+    "bn": "bn-IN",
+    "gu": "gu-IN",
+    "pa": "pa-IN",
+    "mr": "mr-IN",
+}
+
+
+def _resolve_utterance_locale(text: str, settings_language: object, voice_id: str) -> str:
+    """Return the Murf locale for *this* utterance.
+
+    Detects Indic script in the text.  If found, maps it to the corresponding
+    Murf locale (e.g. ``"te-IN"``).  If the text contains no Indic characters
+    (i.e. it is English or neutral), explicitly returns ``"en-US"`` — never
+    the session-level Indic language setting.
+    """
+    detected = language_from_script(text)
+    if detected:
+        return _MURF_INDIC_LOCALE_MAP.get(detected, _resolve_murf_locale(settings_language, voice_id))
+    return "en-US"
 
 
 class MurfTTSService(InterruptibleTTSService):
@@ -218,10 +254,26 @@ class MurfTTSService(InterruptibleTTSService):
         context_id: str | None = None,
         end: bool = False,
     ) -> dict:
+        voice = self._murf_voice()
+        # Use per-utterance language detection so English text never inherits
+        # the session-level Indic locale (e.g. "te-IN").
+        locale_str = _resolve_utterance_locale(text, self._settings.language, voice)
+        voice_cfg: dict[str, Any] = {
+            "voice_id": voice,
+            "voiceId": voice,
+            "model": self._murf_model(),
+            "locale": locale_str,
+        }
+        style = getattr(self._settings, "style", None)
+        if style and style is not NOT_GIVEN:
+            voice_cfg["style"] = str(style).strip()
+        logger.debug(
+            f"Murf TTS language locale={locale_str} chars={len(text)}"
+        )
         msg: dict[str, Any] = {
             "text": text,
             "end": end,
-            "voice_config": self._build_session_config()["voice_config"],
+            "voice_config": voice_cfg,
         }
         if context_id:
             msg["context_id"] = context_id
@@ -395,7 +447,9 @@ class MurfTTSService(InterruptibleTTSService):
             "Content-Type": "application/json",
         }
         voice = self._murf_voice()
-        locale_str = _resolve_murf_locale(self._settings.language, voice)
+        # Use per-utterance language detection so English text never inherits
+        # the session-level Indic locale (e.g. "te-IN").
+        locale_str = _resolve_utterance_locale(text, self._settings.language, voice)
         data: dict[str, Any] = {
             "voiceId": voice,
             "text": text,

@@ -13,8 +13,8 @@ def test_cartesia_tts_configuration_defaults_to_sonic_3_5():
     config = CartesiaTTSConfiguration(api_key="test-key")
 
     assert config.provider == ServiceProviders.CARTESIA
-    assert config.model == "sonic-3.5"
-    assert CARTESIA_TTS_MODELS == ["sonic-3.5", "sonic-3"]
+    assert config.model == "sonic-3.6"
+    assert CARTESIA_TTS_MODELS == ["sonic-3.6", "sonic-3.5", "sonic-3"]
 
 
 def test_create_cartesia_tts_service_passes_selected_model():
