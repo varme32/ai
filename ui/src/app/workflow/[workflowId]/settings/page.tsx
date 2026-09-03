@@ -48,14 +48,26 @@ import logger from "@/lib/logger";
 import { fetchModelConfigurationPricing } from "@/lib/modelConfigurationPricing";
 import {
     type AmbientNoiseConfiguration,
+    type BargeInFilterConfiguration,
+    DEFAULT_BARGE_IN_IGNORE_PHRASES,
     DEFAULT_PROVISIONAL_VAD_PAUSE_SECS,
+    DEFAULT_SEMANTIC_EOT_CONFIGURATION,
+    DEFAULT_SPEECH_TIMEOUT_SECS,
+    DEFAULT_STT_TURN_CONFIGURATION,
+    DEFAULT_TOOL_FILLER_PHRASES,
     DEFAULT_TURN_START_MIN_WORDS,
+    DEFAULT_VAD_CONFIGURATION,
     DEFAULT_VOICEMAIL_DETECTION_CONFIGURATION,
     type ExternalPBXFieldMapping,
     resolveWorkflowConfigurations,
+    type SemanticEotConfiguration,
+    type SttTurnConfiguration,
+    type ToolFillerConfiguration,
     TURN_START_STRATEGY_OPTIONS,
+    TURN_STOP_STRATEGY_OPTIONS,
     type TurnStartStrategy,
     type TurnStopStrategy,
+    type VadConfiguration,
     type VoicemailDetectionConfiguration,
     type WorkflowConfigurations,
 } from "@/types/workflow-configurations";
@@ -296,6 +308,36 @@ function GeneralSection({
     const [turnStopStrategy, setTurnStopStrategy] = useState<TurnStopStrategy>(
         workflowConfigurations.turn_stop_strategy,
     );
+    const [speechTimeoutSecs, setSpeechTimeoutSecs] = useState(
+        workflowConfigurations.speech_timeout_secs ?? DEFAULT_SPEECH_TIMEOUT_SECS,
+    );
+    const [userTurnStopTimeout, setUserTurnStopTimeout] = useState(
+        workflowConfigurations.user_turn_stop_timeout != null
+            ? String(workflowConfigurations.user_turn_stop_timeout)
+            : "",
+    );
+    const [vadConfig, setVadConfig] = useState<VadConfiguration>(
+        workflowConfigurations.vad_configuration ?? DEFAULT_VAD_CONFIGURATION,
+    );
+    const [semanticEotConfig, setSemanticEotConfig] = useState<SemanticEotConfiguration>(
+        workflowConfigurations.semantic_eot_configuration ?? DEFAULT_SEMANTIC_EOT_CONFIGURATION,
+    );
+    const [sttTurnConfig, setSttTurnConfig] = useState<SttTurnConfiguration>(
+        workflowConfigurations.stt_turn_configuration ?? DEFAULT_STT_TURN_CONFIGURATION,
+    );
+    const [bargeInFilter, setBargeInFilter] = useState<BargeInFilterConfiguration>(
+        workflowConfigurations.barge_in_filter ?? {
+            enabled: false,
+            ignore_phrases: DEFAULT_BARGE_IN_IGNORE_PHRASES,
+        },
+    );
+    const [toolFillerConfig, setToolFillerConfig] = useState<ToolFillerConfiguration>(
+        workflowConfigurations.tool_filler_configuration ?? {
+            enabled: false,
+            delay_ms: 600,
+            phrases: DEFAULT_TOOL_FILLER_PHRASES,
+        },
+    );
     const [contextCompactionEnabled, setContextCompactionEnabled] = useState(
         workflowConfigurations.context_compaction_enabled,
     );
@@ -331,13 +373,29 @@ function GeneralSection({
             turnStartMinWords !== workflowConfigurations.turn_start_min_words ||
             provisionalVadPauseSecs !== workflowConfigurations.provisional_vad_pause_secs ||
             turnStopStrategy !== workflowConfigurations.turn_stop_strategy ||
+            speechTimeoutSecs !== (workflowConfigurations.speech_timeout_secs ?? DEFAULT_SPEECH_TIMEOUT_SECS) ||
+            userTurnStopTimeout !== (workflowConfigurations.user_turn_stop_timeout != null
+                ? String(workflowConfigurations.user_turn_stop_timeout)
+                : "") ||
+            JSON.stringify(vadConfig) !== JSON.stringify(workflowConfigurations.vad_configuration ?? DEFAULT_VAD_CONFIGURATION) ||
+            JSON.stringify(semanticEotConfig) !== JSON.stringify(workflowConfigurations.semantic_eot_configuration ?? DEFAULT_SEMANTIC_EOT_CONFIGURATION) ||
+            JSON.stringify(sttTurnConfig) !== JSON.stringify(workflowConfigurations.stt_turn_configuration ?? DEFAULT_STT_TURN_CONFIGURATION) ||
+            JSON.stringify(bargeInFilter) !== JSON.stringify(workflowConfigurations.barge_in_filter ?? {
+                enabled: false,
+                ignore_phrases: DEFAULT_BARGE_IN_IGNORE_PHRASES,
+            }) ||
+            JSON.stringify(toolFillerConfig) !== JSON.stringify(workflowConfigurations.tool_filler_configuration ?? {
+                enabled: false,
+                delay_ms: 600,
+                phrases: DEFAULT_TOOL_FILLER_PHRASES,
+            }) ||
             contextCompactionEnabled !== workflowConfigurations.context_compaction_enabled ||
             includeTranscriptEndTimestamps !==
             (workflowConfigurations.transcript_configuration?.include_end_timestamps ?? false) ||
             JSON.stringify(externalPbxFieldMappings) !==
             JSON.stringify(workflowConfigurations.external_pbx_field_mappings)
         );
-    }, [name, workflowName, ambientNoiseConfig, maxCallDuration, maxUserIdleTimeout, smartTurnStopSecs, turnStartStrategy, turnStartMinWords, provisionalVadPauseSecs, turnStopStrategy, contextCompactionEnabled, includeTranscriptEndTimestamps, externalPbxFieldMappings, workflowConfigurations]);
+    }, [name, workflowName, ambientNoiseConfig, maxCallDuration, maxUserIdleTimeout, smartTurnStopSecs, turnStartStrategy, turnStartMinWords, provisionalVadPauseSecs, turnStopStrategy, speechTimeoutSecs, userTurnStopTimeout, vadConfig, semanticEotConfig, sttTurnConfig, bargeInFilter, toolFillerConfig, contextCompactionEnabled, includeTranscriptEndTimestamps, externalPbxFieldMappings, workflowConfigurations]);
 
     useUnsavedChanges("general", isDirty);
 
@@ -402,26 +460,48 @@ function GeneralSection({
     const handleSave = async () => {
         setIsSaving(true);
         try {
-            await onSave(
-                {
-                    ...workflowConfigurations,
-                    ambient_noise_configuration: ambientNoiseConfig,
-                    max_call_duration: maxCallDuration,
-                    max_user_idle_timeout: maxUserIdleTimeout,
-                    smart_turn_stop_secs: smartTurnStopSecs,
-                    turn_start_strategy: turnStartStrategy,
-                    turn_start_min_words: turnStartMinWords,
-                    provisional_vad_pause_secs: provisionalVadPauseSecs,
-                    turn_stop_strategy: turnStopStrategy,
-                    context_compaction_enabled: contextCompactionEnabled,
-                    transcript_configuration: {
-                        ...(workflowConfigurations.transcript_configuration ?? {}),
-                        include_end_timestamps: includeTranscriptEndTimestamps,
-                    },
-                    external_pbx_field_mappings: externalPbxFieldMappings,
+            const parsedUserTurnStopTimeout = userTurnStopTimeout.trim() === ""
+                ? undefined
+                : Number(userTurnStopTimeout);
+            const nextConfigurations: WorkflowConfigurations = {
+                ...workflowConfigurations,
+                ambient_noise_configuration: ambientNoiseConfig,
+                max_call_duration: maxCallDuration,
+                max_user_idle_timeout: maxUserIdleTimeout,
+                smart_turn_stop_secs: smartTurnStopSecs,
+                turn_start_strategy: turnStartStrategy,
+                turn_start_min_words: turnStartMinWords,
+                provisional_vad_pause_secs: provisionalVadPauseSecs,
+                turn_stop_strategy: turnStopStrategy,
+                speech_timeout_secs: speechTimeoutSecs,
+                vad_configuration: vadConfig,
+                semantic_eot_configuration: semanticEotConfig,
+                stt_turn_configuration: sttTurnConfig,
+                barge_in_filter: {
+                    ...bargeInFilter,
+                    ignore_phrases: bargeInFilter.ignore_phrases
+                        .map((phrase) => phrase.trim())
+                        .filter(Boolean),
                 },
-                name,
-            );
+                tool_filler_configuration: {
+                    ...toolFillerConfig,
+                    phrases: toolFillerConfig.phrases
+                        .map((phrase) => phrase.trim())
+                        .filter(Boolean),
+                },
+                context_compaction_enabled: contextCompactionEnabled,
+                transcript_configuration: {
+                    ...(workflowConfigurations.transcript_configuration ?? {}),
+                    include_end_timestamps: includeTranscriptEndTimestamps,
+                },
+                external_pbx_field_mappings: externalPbxFieldMappings,
+            };
+            if (parsedUserTurnStopTimeout != null && !Number.isNaN(parsedUserTurnStopTimeout)) {
+                nextConfigurations.user_turn_stop_timeout = parsedUserTurnStopTimeout;
+            } else {
+                delete nextConfigurations.user_turn_stop_timeout;
+            }
+            await onSave(nextConfigurations, name);
         } catch (error) {
             console.error("Failed to save general settings:", error);
         } finally {
@@ -599,16 +679,39 @@ function GeneralSection({
                                 <SelectValue placeholder="Select strategy" />
                             </SelectTrigger>
                             <SelectContent>
-                                <SelectItem value="transcription">Transcription-based</SelectItem>
-                                <SelectItem value="turn_analyzer">Smart Turn Analyzer</SelectItem>
+                                {TURN_STOP_STRATEGY_OPTIONS.map((option) => (
+                                    <SelectItem key={option.value} value={option.value}>
+                                        {option.label}
+                                    </SelectItem>
+                                ))}
                             </SelectContent>
                         </Select>
                         <p className="text-xs text-muted-foreground">
-                            {turnStopStrategy === "transcription"
-                                ? "Best for short responses (1-2 word statements). Ends turn when transcription indicates completion."
-                                : "Best for longer responses with natural pauses. Uses ML model to detect end of turn."}
+                            {TURN_STOP_STRATEGY_OPTIONS.find((option) => option.value === turnStopStrategy)?.description}
                         </p>
                     </div>
+                    {turnStopStrategy === "transcription" && (
+                        <div className="space-y-2">
+                            <Label htmlFor="speech_timeout_secs" className="text-xs">
+                                Speech timeout (seconds)
+                            </Label>
+                            <Input
+                                id="speech_timeout_secs"
+                                type="number"
+                                step="0.05"
+                                min="0.05"
+                                max="2"
+                                value={speechTimeoutSecs}
+                                onChange={(e) => {
+                                    const value = parseFloat(e.target.value);
+                                    if (!isNaN(value) && value >= 0.05) setSpeechTimeoutSecs(value);
+                                }}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                How long to wait after the caller stops speaking before the agent replies. Default: {DEFAULT_SPEECH_TIMEOUT_SECS}s
+                            </p>
+                        </div>
+                    )}
                     {turnStopStrategy === "turn_analyzer" && (
                         <div className="space-y-2">
                             <Label htmlFor="smart_turn_stop_secs" className="text-xs">
@@ -631,6 +734,72 @@ function GeneralSection({
                             </p>
                         </div>
                     )}
+                    {turnStopStrategy === "semantic_eot" && (
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <Label htmlFor="semantic_eot_complete" className="text-xs">
+                                    Complete-sentence wait (seconds)
+                                </Label>
+                                <Input
+                                    id="semantic_eot_complete"
+                                    type="number"
+                                    step="0.05"
+                                    min="0.1"
+                                    max="2"
+                                    value={semanticEotConfig.complete_timeout_secs}
+                                    onChange={(e) => {
+                                        const value = parseFloat(e.target.value);
+                                        if (!isNaN(value) && value >= 0.1) {
+                                            setSemanticEotConfig((prev) => ({ ...prev, complete_timeout_secs: value }));
+                                        }
+                                    }}
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Used when the transcript looks finished, e.g. &quot;is that okay?&quot;
+                                </p>
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="semantic_eot_incomplete" className="text-xs">
+                                    Incomplete-sentence wait (seconds)
+                                </Label>
+                                <Input
+                                    id="semantic_eot_incomplete"
+                                    type="number"
+                                    step="0.1"
+                                    min="0.3"
+                                    max="3"
+                                    value={semanticEotConfig.incomplete_timeout_secs}
+                                    onChange={(e) => {
+                                        const value = parseFloat(e.target.value);
+                                        if (!isNaN(value) && value >= 0.3) {
+                                            setSemanticEotConfig((prev) => ({ ...prev, incomplete_timeout_secs: value }));
+                                        }
+                                    }}
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Used when the caller trails off, e.g. &quot;because I want...&quot;
+                                </p>
+                            </div>
+                        </div>
+                    )}
+                    <div className="space-y-2">
+                        <Label htmlFor="user_turn_stop_timeout" className="text-xs">
+                            Safety timeout (seconds, optional)
+                        </Label>
+                        <Input
+                            id="user_turn_stop_timeout"
+                            type="number"
+                            step="0.5"
+                            min="0.5"
+                            max="30"
+                            placeholder="Platform default"
+                            value={userTurnStopTimeout}
+                            onChange={(e) => setUserTurnStopTimeout(e.target.value)}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                            Leave blank to keep the platform default (1.5s, or 30s when STT owns turn-end). Only set this if replies hang after the caller stops.
+                        </p>
+                    </div>
                 </div>
 
                 <Separator />
@@ -712,6 +881,281 @@ function GeneralSection({
                                 Seconds to pause bot audio while waiting for transcript confirmation. Default: {DEFAULT_PROVISIONAL_VAD_PAUSE_SECS}
                             </p>
                         </div>
+                    )}
+                    <div className="flex items-center justify-between">
+                        <div className="space-y-0.5 pr-4">
+                            <Label htmlFor="barge-in-filter-enabled" className="text-sm">Filter backchannels</Label>
+                            <p className="text-xs text-muted-foreground">
+                                Ignore short acknowledgements like &quot;yeah&quot; or &quot;okay&quot; while the agent is speaking so they do not cut it off.
+                            </p>
+                        </div>
+                        <Switch
+                            id="barge-in-filter-enabled"
+                            checked={bargeInFilter.enabled}
+                            onCheckedChange={(checked) =>
+                                setBargeInFilter((prev) => ({ ...prev, enabled: checked }))
+                            }
+                        />
+                    </div>
+                    {bargeInFilter.enabled && (
+                        <div className="space-y-2">
+                            <Label htmlFor="barge_in_ignore_phrases" className="text-xs">
+                                Ignored phrases (one per line)
+                            </Label>
+                            <Textarea
+                                id="barge_in_ignore_phrases"
+                                rows={5}
+                                value={bargeInFilter.ignore_phrases.join("\n")}
+                                onChange={(e) =>
+                                    setBargeInFilter((prev) => ({
+                                        ...prev,
+                                        ignore_phrases: e.target.value.split("\n"),
+                                    }))
+                                }
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                These phrases are ignored only while the agent is talking. When the agent is silent, &quot;okay&quot; still counts as an answer.
+                            </p>
+                        </div>
+                    )}
+                </div>
+
+                <Separator />
+
+                {/* Voice Activity Detection */}
+                <div className="space-y-4">
+                    <div>
+                        <h3 className="text-sm font-medium">Voice Activity Detection</h3>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                            Tune how quickly the agent detects that the caller started or stopped speaking. Defaults match the production telephony profile.
+                        </p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                            <Label htmlFor="vad_confidence" className="text-xs">Confidence</Label>
+                            <Input
+                                id="vad_confidence"
+                                type="number"
+                                step="0.05"
+                                min="0.1"
+                                max="1"
+                                value={vadConfig.confidence}
+                                onChange={(e) => {
+                                    const value = parseFloat(e.target.value);
+                                    if (!isNaN(value)) setVadConfig((prev) => ({ ...prev, confidence: value }));
+                                }}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="vad_min_volume" className="text-xs">Min volume</Label>
+                            <Input
+                                id="vad_min_volume"
+                                type="number"
+                                step="0.05"
+                                min="0"
+                                max="1"
+                                value={vadConfig.min_volume}
+                                onChange={(e) => {
+                                    const value = parseFloat(e.target.value);
+                                    if (!isNaN(value)) setVadConfig((prev) => ({ ...prev, min_volume: value }));
+                                }}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="vad_start_secs" className="text-xs">Start window (seconds)</Label>
+                            <Input
+                                id="vad_start_secs"
+                                type="number"
+                                step="0.05"
+                                min="0.05"
+                                max="2"
+                                value={vadConfig.start_secs}
+                                onChange={(e) => {
+                                    const value = parseFloat(e.target.value);
+                                    if (!isNaN(value)) setVadConfig((prev) => ({ ...prev, start_secs: value }));
+                                }}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="vad_stop_secs" className="text-xs">Stop window (seconds)</Label>
+                            <Input
+                                id="vad_stop_secs"
+                                type="number"
+                                step="0.05"
+                                min="0.05"
+                                max="2"
+                                value={vadConfig.stop_secs}
+                                onChange={(e) => {
+                                    const value = parseFloat(e.target.value);
+                                    if (!isNaN(value)) setVadConfig((prev) => ({ ...prev, stop_secs: value }));
+                                }}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="vad_realtime_prefix" className="text-xs">Realtime prefix padding (ms)</Label>
+                            <Input
+                                id="vad_realtime_prefix"
+                                type="number"
+                                step="10"
+                                min="0"
+                                max="1000"
+                                value={vadConfig.realtime_prefix_padding_ms}
+                                onChange={(e) => {
+                                    const value = parseInt(e.target.value, 10);
+                                    if (!isNaN(value)) setVadConfig((prev) => ({ ...prev, realtime_prefix_padding_ms: value }));
+                                }}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="vad_realtime_silence" className="text-xs">Realtime silence (ms)</Label>
+                            <Input
+                                id="vad_realtime_silence"
+                                type="number"
+                                step="50"
+                                min="50"
+                                max="2000"
+                                value={vadConfig.realtime_silence_duration_ms}
+                                onChange={(e) => {
+                                    const value = parseInt(e.target.value, 10);
+                                    if (!isNaN(value)) setVadConfig((prev) => ({ ...prev, realtime_silence_duration_ms: value }));
+                                }}
+                            />
+                        </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                        Realtime prefix and silence apply to Gemini Live. Other speech-to-speech providers use their own server VAD.
+                    </p>
+                </div>
+
+                <Separator />
+
+                {/* STT endpointing */}
+                <div className="space-y-4">
+                    <div>
+                        <h3 className="text-sm font-medium">Speech-to-text endpointing</h3>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                            Provider-level end-of-turn settings. Used by Deepgram Nova endpointing and Deepgram Flux / Dograh Flux.
+                        </p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                            <Label htmlFor="stt_endpointing_ms" className="text-xs">Endpointing (ms)</Label>
+                            <Input
+                                id="stt_endpointing_ms"
+                                type="number"
+                                step="50"
+                                min="50"
+                                max="2000"
+                                value={sttTurnConfig.endpointing_ms}
+                                onChange={(e) => {
+                                    const value = parseInt(e.target.value, 10);
+                                    if (!isNaN(value)) setSttTurnConfig((prev) => ({ ...prev, endpointing_ms: value }));
+                                }}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="flux_eot_timeout_ms" className="text-xs">Flux EOT timeout (ms)</Label>
+                            <Input
+                                id="flux_eot_timeout_ms"
+                                type="number"
+                                step="50"
+                                min="100"
+                                max="3000"
+                                value={sttTurnConfig.flux_eot_timeout_ms}
+                                onChange={(e) => {
+                                    const value = parseInt(e.target.value, 10);
+                                    if (!isNaN(value)) setSttTurnConfig((prev) => ({ ...prev, flux_eot_timeout_ms: value }));
+                                }}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="flux_eot_threshold" className="text-xs">Flux EOT threshold</Label>
+                            <Input
+                                id="flux_eot_threshold"
+                                type="number"
+                                step="0.05"
+                                min="0.1"
+                                max="1"
+                                value={sttTurnConfig.flux_eot_threshold}
+                                onChange={(e) => {
+                                    const value = parseFloat(e.target.value);
+                                    if (!isNaN(value)) setSttTurnConfig((prev) => ({ ...prev, flux_eot_threshold: value }));
+                                }}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="flux_eager_eot_threshold" className="text-xs">Flux eager EOT threshold</Label>
+                            <Input
+                                id="flux_eager_eot_threshold"
+                                type="number"
+                                step="0.05"
+                                min="0.1"
+                                max="1"
+                                value={sttTurnConfig.flux_eager_eot_threshold}
+                                onChange={(e) => {
+                                    const value = parseFloat(e.target.value);
+                                    if (!isNaN(value)) setSttTurnConfig((prev) => ({ ...prev, flux_eager_eot_threshold: value }));
+                                }}
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                <Separator />
+
+                {/* Tool fillers */}
+                <div className="space-y-4">
+                    <div>
+                        <h3 className="text-sm font-medium">Tool-call fillers</h3>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                            If a tool, MCP call, or knowledge-base lookup is still running after the delay, the agent speaks a short filler so the line does not go silent.
+                        </p>
+                    </div>
+                    <div className="flex items-center justify-between">
+                        <Label htmlFor="tool-filler-enabled" className="text-sm">Speak fillers on slow tools</Label>
+                        <Switch
+                            id="tool-filler-enabled"
+                            checked={toolFillerConfig.enabled}
+                            onCheckedChange={(checked) =>
+                                setToolFillerConfig((prev) => ({ ...prev, enabled: checked }))
+                            }
+                        />
+                    </div>
+                    {toolFillerConfig.enabled && (
+                        <>
+                            <div className="space-y-2">
+                                <Label htmlFor="tool_filler_delay_ms" className="text-xs">Delay before filler (ms)</Label>
+                                <Input
+                                    id="tool_filler_delay_ms"
+                                    type="number"
+                                    step="50"
+                                    min="100"
+                                    max="5000"
+                                    value={toolFillerConfig.delay_ms}
+                                    onChange={(e) => {
+                                        const value = parseInt(e.target.value, 10);
+                                        if (!isNaN(value)) setToolFillerConfig((prev) => ({ ...prev, delay_ms: value }));
+                                    }}
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="tool_filler_phrases" className="text-xs">Filler phrases (one per line)</Label>
+                                <Textarea
+                                    id="tool_filler_phrases"
+                                    rows={4}
+                                    value={toolFillerConfig.phrases.join("\n")}
+                                    onChange={(e) =>
+                                        setToolFillerConfig((prev) => ({
+                                            ...prev,
+                                            phrases: e.target.value.split("\n"),
+                                        }))
+                                    }
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    HTTP tools that already have a custom message keep that message and skip the filler.
+                                </p>
+                            </div>
+                        </>
                     )}
                 </div>
 

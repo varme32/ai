@@ -53,6 +53,7 @@ from api.services.workflow.pipecat_engine_variable_extractor import (
 from api.services.workflow.tools.knowledge_base import (
     retrieve_from_knowledge_base,
 )
+from api.services.workflow.tool_fillers import tool_filler
 from api.utils.template_renderer import render_template
 
 
@@ -78,6 +79,7 @@ class PipecatEngine:
         embeddings_api_version: Optional[str] = None,
         has_recordings: bool = False,
         context_compaction_enabled: bool = False,
+        tool_filler_configuration: Optional[dict] = None,
     ):
         self.task = task
         self.llm = llm
@@ -136,6 +138,7 @@ class PipecatEngine:
         self._embeddings_provider: Optional[str] = embeddings_provider
         self._embeddings_endpoint: Optional[str] = embeddings_endpoint
         self._embeddings_api_version: Optional[str] = embeddings_api_version
+        self._tool_filler_configuration: Optional[dict] = tool_filler_configuration
 
         # Audio configuration (set via set_audio_config from _run_pipeline)
         self._audio_config = None
@@ -389,22 +392,23 @@ class PipecatEngine:
                         "Organization ID not available for knowledge base retrieval"
                     )
 
-                result = await retrieve_from_knowledge_base(
-                    query=query,
-                    organization_id=organization_id,
-                    document_uuids=document_uuids,
-                    limit=3,  # Return top 3 most relevant chunks
-                    embeddings_api_key=self._embeddings_api_key,
-                    embeddings_model=self._embeddings_model,
-                    embeddings_base_url=self._embeddings_base_url,
-                    embeddings_provider=self._embeddings_provider,
-                    embeddings_endpoint=self._embeddings_endpoint,
-                    embeddings_api_version=self._embeddings_api_version,
-                    correlation_id=self._call_context_vars.get(
-                        MPS_CORRELATION_ID_CONTEXT_KEY
-                    ),
-                    tracing_context=self._get_otel_context(),
-                )
+                async with tool_filler(self):
+                    result = await retrieve_from_knowledge_base(
+                        query=query,
+                        organization_id=organization_id,
+                        document_uuids=document_uuids,
+                        limit=3,  # Return top 3 most relevant chunks
+                        embeddings_api_key=self._embeddings_api_key,
+                        embeddings_model=self._embeddings_model,
+                        embeddings_base_url=self._embeddings_base_url,
+                        embeddings_provider=self._embeddings_provider,
+                        embeddings_endpoint=self._embeddings_endpoint,
+                        embeddings_api_version=self._embeddings_api_version,
+                        correlation_id=self._call_context_vars.get(
+                            MPS_CORRELATION_ID_CONTEXT_KEY
+                        ),
+                        tracing_context=self._get_otel_context(),
+                    )
 
                 await function_call_params.result_callback(result)
 

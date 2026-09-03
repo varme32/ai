@@ -17,6 +17,8 @@ When **Allow Interruption** is enabled on a node, VAD is what triggers the inter
 
 VAD also feeds turn-taking more generally — it's part of how Dograh decides a caller has finished a turn and the agent should respond, independent of whether interruption is enabled.
 
+Per-agent VAD thresholds, turn-stop strategy (including semantic end-of-turn), backchannel filtering, STT endpointing, and tool-call fillers are configured from **Settings → General**. See [Voice Runtime](/configurations/voice-runtime).
+
 <Note>
 **Valid sample rates**: Dograh's pipeline runs VAD at either **8000 Hz** or **16000 Hz** — no other value is accepted. The overall pipeline sample rate is capped at 16 kHz to satisfy this. This only matters if you're integrating a [custom telephony provider](/integrations/telephony/custom#audio-format-considerations); telephony providers built into Dograh (Twilio, Vonage, Plivo, etc.) already negotiate a supported rate for you.
 </Note>

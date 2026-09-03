@@ -19,7 +19,7 @@ export const KNOWLEDGE_BASE_DOC_URL = `${DOCS_BASE}/voice-agent/knowledge-base`;
 export const PRE_CALL_DATA_FETCH_DOC_URL = `${DOCS_BASE}/voice-agent/pre-call-data-fetch`;
 
 export const SETTINGS_DOCUMENTATION_URLS: Record<string, string> = {
-    general: `${DOCS_BASE}/voice-agent/editing-a-workflow`,
+    general: `${DOCS_BASE}/configurations/voice-runtime`,
     modelOverrides: `${DOCS_BASE}/configurations/inference-providers`,
     templateVariables: `${DOCS_BASE}/voice-agent/template-variables`,
 

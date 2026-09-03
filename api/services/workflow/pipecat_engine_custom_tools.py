@@ -23,6 +23,7 @@ from pipecat.utils.enums import EndTaskReason
 from api.db import db_client
 from api.enums import ToolCategory, WorkflowRunMode
 from api.services.pipecat.audio_playback import play_audio, play_audio_loop
+from api.services.workflow.tool_fillers import tool_filler
 from api.services.telephony.call_transfer_manager import get_call_transfer_manager
 from api.services.telephony.external_pbx import resolve_external_pbx_field_mappings
 from api.services.telephony.factory import get_telephony_provider_for_run
@@ -367,7 +368,8 @@ class CustomToolManager:
             logger.info(f"Arguments: {function_call_params.arguments}")
             try:
                 expr = function_call_params.arguments.get("expression", "")
-                result = safe_calculator(expr)
+                async with tool_filler(self._engine):
+                    result = safe_calculator(expr)
                 await function_call_params.result_callback(
                     {"expression": expr, "result": result}
                 )
@@ -432,13 +434,15 @@ class CustomToolManager:
                         )
                     )
 
-                result = await execute_http_tool(
-                    tool=tool,
-                    arguments=function_call_params.arguments,
-                    call_context_vars=self._engine._call_context_vars,
-                    gathered_context_vars=self._engine._gathered_context,
-                    organization_id=await self.get_organization_id(),
-                )
+                already_spoke = custom_msg_type == "audio" or bool(custom_message)
+                async with tool_filler(self._engine, skip=already_spoke):
+                    result = await execute_http_tool(
+                        tool=tool,
+                        arguments=function_call_params.arguments,
+                        call_context_vars=self._engine._call_context_vars,
+                        gathered_context_vars=self._engine._gathered_context,
+                        organization_id=await self.get_organization_id(),
+                    )
 
                 await function_call_params.result_callback(result)
 
@@ -461,9 +465,10 @@ class CustomToolManager:
             logger.info(f"MCP Tool EXECUTED: {function_name}")
             logger.info(f"Arguments: {function_call_params.arguments}")
             try:
-                result = await session.call(
-                    function_name, function_call_params.arguments or {}
-                )
+                async with tool_filler(self._engine):
+                    result = await session.call(
+                        function_name, function_call_params.arguments or {}
+                    )
                 await function_call_params.result_callback(result)
             except Exception as e:
                 logger.error(f"MCP tool '{function_name}' failed: {e}")

@@ -7034,6 +7034,58 @@ export type VonageConfigurationResponse = {
 export type WebhookCredentialType = 'none' | 'api_key' | 'bearer_token' | 'basic_auth' | 'custom_header';
 
 /**
+ * VadConfigurationDefaults
+ */
+export type VadConfigurationDefaults = {
+    confidence?: number;
+    min_volume?: number;
+    start_secs?: number;
+    stop_secs?: number;
+    realtime_prefix_padding_ms?: number;
+    realtime_silence_duration_ms?: number;
+    [key: string]: unknown;
+};
+
+/**
+ * SemanticEotConfigurationDefaults
+ */
+export type SemanticEotConfigurationDefaults = {
+    complete_timeout_secs?: number;
+    incomplete_timeout_secs?: number;
+    [key: string]: unknown;
+};
+
+/**
+ * SttTurnConfigurationDefaults
+ */
+export type SttTurnConfigurationDefaults = {
+    endpointing_ms?: number;
+    flux_eot_timeout_ms?: number;
+    flux_eot_threshold?: number;
+    flux_eager_eot_threshold?: number;
+    [key: string]: unknown;
+};
+
+/**
+ * BargeInFilterConfigurationDefaults
+ */
+export type BargeInFilterConfigurationDefaults = {
+    enabled?: boolean;
+    ignore_phrases?: Array<string>;
+    [key: string]: unknown;
+};
+
+/**
+ * ToolFillerConfigurationDefaults
+ */
+export type ToolFillerConfigurationDefaults = {
+    enabled?: boolean;
+    delay_ms?: number;
+    phrases?: Array<string>;
+    [key: string]: unknown;
+};
+
+/**
  * WorkflowConfigurationDefaults
  */
 export type WorkflowConfigurationDefaults = {
@@ -7065,7 +7117,20 @@ export type WorkflowConfigurationDefaults = {
     /**
      * Turn Stop Strategy
      */
-    turn_stop_strategy?: 'transcription' | 'turn_analyzer';
+    turn_stop_strategy?: 'transcription' | 'turn_analyzer' | 'semantic_eot';
+    /**
+     * Speech Timeout Secs
+     */
+    speech_timeout_secs?: number;
+    /**
+     * User Turn Stop Timeout
+     */
+    user_turn_stop_timeout?: number | null;
+    vad_configuration?: VadConfigurationDefaults;
+    semantic_eot_configuration?: SemanticEotConfigurationDefaults;
+    stt_turn_configuration?: SttTurnConfigurationDefaults;
+    barge_in_filter?: BargeInFilterConfigurationDefaults;
+    tool_filler_configuration?: ToolFillerConfigurationDefaults;
     /**
      * Dictionary
      */

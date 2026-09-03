@@ -11,7 +11,6 @@ from api.enums import WorkflowRunMode
 from api.schemas.workflow_configurations import (
     DEFAULT_PROVISIONAL_VAD_PAUSE_SECS,
     DEFAULT_SMART_TURN_STOP_SECS,
-    DEFAULT_SPEECH_TIMEOUT_SECS,
     DEFAULT_TURN_START_MIN_WORDS,
     DEFAULT_TURN_START_MIN_WORDS_TELEPHONY,
     DEFAULT_TURN_START_STRATEGY,
@@ -30,10 +29,19 @@ from api.services.pipecat.active_calls import (
 )
 from api.services.pipecat.audio_config import AudioConfig, create_audio_config
 from api.services.pipecat.audio_model_warmup import (
-    CONVERSATIONAL_VAD_PARAMS,
     create_silero_vad_analyzer,
     create_silero_vad_analyzer_async,
     get_warmed_vad,
+)
+from api.services.pipecat.barge_in import IgnorePhraseUserTurnStartStrategy
+from api.services.pipecat.semantic_eot import SemanticEotUserTurnStopStrategy
+from api.services.pipecat.voice_runtime import (
+    resolve_barge_in_ignore_phrases,
+    resolve_semantic_eot_timeouts,
+    resolve_speech_timeout_secs,
+    resolve_tool_filler_config,
+    resolve_vad_params,
+    should_reuse_warmed_vad,
 )
 from api.services.pipecat.event_handlers import (
     register_audio_data_handler,
@@ -130,8 +138,9 @@ EXTERNAL_TURN_USER_STOP_TIMEOUT = 30.0
 def _resolve_user_turn_stop_timeout(
     run_configs: dict, *, uses_external_turns: bool
 ) -> float:
-    if "user_turn_stop_timeout" in run_configs:
-        return float(run_configs["user_turn_stop_timeout"])
+    raw = run_configs.get("user_turn_stop_timeout")
+    if raw is not None and raw != "":
+        return float(raw)
     if uses_external_turns:
         return EXTERNAL_TURN_USER_STOP_TIMEOUT
     return DEFAULT_USER_TURN_STOP_TIMEOUT
@@ -163,13 +172,17 @@ def _create_non_realtime_user_turn_start_strategies(
     turn_start_strategy = run_configs.get(
         "turn_start_strategy", DEFAULT_TURN_START_STRATEGY
     )
+    ignore_phrases = resolve_barge_in_ignore_phrases(run_configs)
 
     if turn_start_strategy == "min_words":
-        return [
-            MinWordsUserTurnStartStrategy(
-                min_words=_resolve_turn_start_min_words(run_configs)
-            )
-        ]
+        min_words = _resolve_turn_start_min_words(run_configs)
+        if ignore_phrases:
+            return [
+                IgnorePhraseUserTurnStartStrategy(
+                    min_words=min_words, ignore_phrases=ignore_phrases
+                )
+            ]
+        return [MinWordsUserTurnStartStrategy(min_words=min_words)]
 
     if turn_start_strategy == "provisional_vad":
         return [
@@ -184,6 +197,16 @@ def _create_non_realtime_user_turn_start_strategies(
         # win the race on raw voice activity and start the turn before the STT
         # confirms a real turn.
         return [ExternalUserTurnStartStrategy(enable_interruptions=True)]
+
+    if ignore_phrases:
+        # Transcription-gated barge-in so listed backchannels do not cut the
+        # bot. Raw VAD is omitted on purpose: it would win the race before
+        # the transcript can be filtered.
+        return [
+            IgnorePhraseUserTurnStartStrategy(
+                min_words=1, ignore_phrases=ignore_phrases
+            )
+        ]
 
     # Default non-realtime turn start strategies:
     # - TranscriptionUserTurnStartStrategy: triggers turn start on transcription frames
@@ -216,10 +239,36 @@ def _create_non_realtime_user_turn_stop_strategies(
             )
         ]
 
-    return [SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=DEFAULT_SPEECH_TIMEOUT_SECS)]
+    if run_configs.get("turn_stop_strategy") == "semantic_eot":
+        complete_secs, incomplete_secs = resolve_semantic_eot_timeouts(run_configs)
+        return [
+            SemanticEotUserTurnStopStrategy(
+                complete_timeout_secs=complete_secs,
+                incomplete_timeout_secs=incomplete_secs,
+            )
+        ]
+
+    return [
+        SpeechTimeoutUserTurnStopStrategy(
+            user_speech_timeout=resolve_speech_timeout_secs(run_configs)
+        )
+    ]
 
 
-def _create_realtime_user_turn_config(provider: str, vad_analyzer=None):
+def _resolve_vad_analyzer(run_configs: dict | None, vad_analyzer=None):
+    """Reuse a warmed analyzer only when its params match this run."""
+    params = resolve_vad_params(run_configs)
+    if should_reuse_warmed_vad(vad_analyzer, params):
+        return vad_analyzer
+    warmed = get_warmed_vad()
+    if should_reuse_warmed_vad(warmed, params):
+        return warmed
+    return create_silero_vad_analyzer(params)
+
+
+def _create_realtime_user_turn_config(
+    provider: str, vad_analyzer=None, run_configs: dict | None = None
+):
     """Return user turn strategies and optional local VAD for realtime providers."""
 
     def external_provider_turn_config():
@@ -234,12 +283,10 @@ def _create_realtime_user_turn_config(provider: str, vad_analyzer=None):
     def local_vad_turn_config(*, enable_interruptions: bool):
         # Prefer the prewarmed analyzer, then the process-warmed Silero
         # session, so Gemini Live does not pay a 300–800 ms ONNX load on
-        # the answer path.
-        analyzer = (
-            vad_analyzer
-            or get_warmed_vad()
-            or create_silero_vad_analyzer(CONVERSATIONAL_VAD_PARAMS)
-        )
+        # the answer path. Custom VAD params force a fresh analyzer so
+        # concurrent calls are not mutated through the process singleton.
+        analyzer = _resolve_vad_analyzer(run_configs, vad_analyzer)
+        speech_timeout = resolve_speech_timeout_secs(run_configs)
         return (
             UserTurnStrategies(
                 start=[
@@ -248,7 +295,7 @@ def _create_realtime_user_turn_config(provider: str, vad_analyzer=None):
                 stop=[
                     SpeechTimeoutUserTurnStopStrategy(
                         wait_for_transcript=False,
-                        user_speech_timeout=DEFAULT_SPEECH_TIMEOUT_SECS,
+                        user_speech_timeout=speech_timeout,
                     )
                 ],
             ),
@@ -796,6 +843,9 @@ async def _run_pipeline_impl(
         embeddings_api_version=embeddings_api_version,
         has_recordings=has_recordings,
         context_compaction_enabled=context_compaction_enabled,
+        tool_filler_configuration=None
+        if is_realtime
+        else resolve_tool_filler_config(run_configs),
     )
 
     # Create pipeline components
@@ -835,6 +885,7 @@ async def _run_pipeline_impl(
         user_turn_strategies, user_vad_analyzer = _create_realtime_user_turn_config(
             user_config.realtime.provider,
             vad_analyzer=resources.vad_analyzer,
+            run_configs=run_configs,
         )
     else:
         # Some STT services emit their own turn boundaries, so the aggregator
@@ -864,7 +915,9 @@ async def _run_pipeline_impl(
         )
         user_vad_analyzer = resources.vad_analyzer
         if user_vad_analyzer is None:
-            user_vad_analyzer = await create_silero_vad_analyzer_async()
+            user_vad_analyzer = await create_silero_vad_analyzer_async(
+                resolve_vad_params(run_configs)
+            )
 
     user_turn_stop_timeout = _resolve_user_turn_stop_timeout(
         run_configs,

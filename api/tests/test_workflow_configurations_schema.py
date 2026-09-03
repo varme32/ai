@@ -88,3 +88,36 @@ def test_external_pbx_field_mapping_rejects_invalid_field_names():
                 {"context_path": "qualified", "destination_field": "invalid-field"}
             ]
         )
+
+
+def test_voice_runtime_defaults_match_current_production_values():
+    config = WorkflowConfigurationDefaults()
+    assert config.turn_stop_strategy == "transcription"
+    assert config.speech_timeout_secs == 0.2
+    assert config.user_turn_stop_timeout is None
+    assert config.vad_configuration.confidence == 0.7
+    assert config.vad_configuration.start_secs == 0.15
+    assert config.vad_configuration.stop_secs == 0.25
+    assert config.stt_turn_configuration.endpointing_ms == 300
+    assert config.stt_turn_configuration.flux_eot_timeout_ms == 800
+    assert config.barge_in_filter.enabled is False
+    assert config.tool_filler_configuration.enabled is False
+
+
+def test_semantic_eot_is_an_allowed_turn_stop_strategy():
+    config = WorkflowConfigurationDefaults(turn_stop_strategy="semantic_eot")
+    assert config.turn_stop_strategy == "semantic_eot"
+    assert config.semantic_eot_configuration.complete_timeout_secs == 0.3
+    assert config.semantic_eot_configuration.incomplete_timeout_secs == 1.2
+
+
+def test_vad_configuration_rejects_out_of_range_confidence():
+    with pytest.raises(ValidationError):
+        WorkflowConfigurationDefaults(vad_configuration={"confidence": 1.5})
+
+
+def test_user_turn_stop_timeout_null_stays_unset():
+    config = WorkflowConfigurationDefaults.model_validate(
+        {"user_turn_stop_timeout": None}
+    )
+    assert config.user_turn_stop_timeout is None

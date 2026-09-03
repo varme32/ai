@@ -604,6 +604,7 @@ class TurnStartStrategy(Enum):
 class TurnStopStrategy(Enum):
     transcription = 'transcription'
     turn_analyzer = 'turn_analyzer'
+    semantic_eot = 'semantic_eot'
 
 
 class WorkflowConfigurationDefaults(BaseModel):
@@ -630,6 +631,17 @@ class WorkflowConfigurationDefaults(BaseModel):
     turn_stop_strategy: Annotated[
         TurnStopStrategy | None, Field(title='Turn Stop Strategy')
     ] = 'transcription'
+    speech_timeout_secs: Annotated[
+        float | None, Field(title='Speech Timeout Secs')
+    ] = 0.2
+    user_turn_stop_timeout: Annotated[
+        float | None, Field(title='User Turn Stop Timeout')
+    ] = None
+    vad_configuration: dict[str, Any] | None = None
+    semantic_eot_configuration: dict[str, Any] | None = None
+    stt_turn_configuration: dict[str, Any] | None = None
+    barge_in_filter: dict[str, Any] | None = None
+    tool_filler_configuration: dict[str, Any] | None = None
     dictionary: Annotated[str | None, Field(title='Dictionary')] = ''
     context_compaction_enabled: Annotated[
         bool | None, Field(title='Context Compaction Enabled')

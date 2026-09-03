@@ -1259,7 +1259,7 @@ export interface components {
              * @default transcription
              * @enum {string}
              */
-            turn_stop_strategy: "transcription" | "turn_analyzer";
+            turn_stop_strategy: "transcription" | "turn_analyzer" | "semantic_eot";
             /**
              * Dictionary
              * @default

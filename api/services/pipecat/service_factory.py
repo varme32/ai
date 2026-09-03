@@ -17,6 +17,10 @@ from api.services.pipecat.gemini_json_schema_adapter import (
 from api.services.pipecat.cartesia_tts import DograhCartesiaTTSService
 from api.services.pipecat.minimax_tts import MiniMaxOwnedSessionTTSService
 from api.services.pipecat.tts_language import resolve_tts_language
+from api.services.pipecat.voice_runtime import (
+    resolve_realtime_vad_ms,
+    resolve_stt_turn_settings,
+)
 from api.utils.url_security import validate_user_configured_service_url
 from pipecat.services.assemblyai.stt import AssemblyAISTTService, AssemblyAISTTSettings
 from pipecat.services.aws.llm import AWSBedrockLLMService, AWSBedrockLLMSettings
@@ -131,7 +135,7 @@ def _tts_runtime_kwargs(text_filter, audio_config) -> dict:
     }
 
 
-def _gemini_live_vad_params():
+def _gemini_live_vad_params(run_configs: dict | None = None):
     """Conversational Gemini Live VAD — barge-in and fast turn-end.
 
     LOW start/end sensitivity plus 300 ms prefix and 700 ms silence made
@@ -143,11 +147,12 @@ def _gemini_live_vad_params():
     from google.genai.types import EndSensitivity, StartSensitivity
     from pipecat.services.google.gemini_live.llm import GeminiVADParams
 
+    prefix_padding_ms, silence_duration_ms = resolve_realtime_vad_ms(run_configs)
     return GeminiVADParams(
         start_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
         end_sensitivity=EndSensitivity.END_SENSITIVITY_HIGH,
-        prefix_padding_ms=100,
-        silence_duration_ms=300,
+        prefix_padding_ms=prefix_padding_ms,
+        silence_duration_ms=silence_duration_ms,
     )
 
 
@@ -274,13 +279,16 @@ def create_stt_service(
     audio_config: "AudioConfig",
     keyterms: list[str] | None = None,
     correlation_id: str | None = None,
+    run_configs: dict | None = None,
 ):
     """Create and return appropriate STT service based on user configuration
 
     Args:
         user_config: User configuration containing STT settings
         keyterms: Optional list of keyterms for speech recognition boosting (Deepgram only)
+        run_configs: Optional workflow configurations for STT end-of-turn knobs.
     """
+    stt_turn = resolve_stt_turn_settings(run_configs)
     logger.info(
         f"Creating STT service: provider={user_config.stt.provider}, model={user_config.stt.model}"
     )
@@ -288,9 +296,9 @@ def create_stt_service(
         if user_config.stt.model in DEEPGRAM_FLUX_MODELS:
             settings_kwargs = {
                 "model": user_config.stt.model,
-                "eot_timeout_ms": 800,
-                "eot_threshold": 0.7,
-                "eager_eot_threshold": 0.5,
+                "eot_timeout_ms": stt_turn["flux_eot_timeout_ms"],
+                "eot_threshold": stt_turn["flux_eot_threshold"],
+                "eager_eot_threshold": stt_turn["flux_eager_eot_threshold"],
                 "keyterm": keyterms or [],
             }
             if user_config.stt.model == "flux-general-multi":
@@ -314,10 +322,10 @@ def create_stt_service(
             settings=DeepgramSTTSettings(
                 language=language,
                 profanity_filter=False,
-                # 300 ms endpointing: long enough for Telugu inter-word pauses,
-                # short enough that turn-end is not stacked on top of VAD +
-                # speech-timeout into a 1s+ gap after the caller stops.
-                endpointing=300,
+                # Default 300 ms endpointing: long enough for Telugu inter-word
+                # pauses, short enough that turn-end is not stacked on top of
+                # VAD + speech-timeout into a 1s+ gap after the caller stops.
+                endpointing=stt_turn["endpointing_ms"],
                 model=user_config.stt.model,
                 keyterm=keyterms or [],
             ),
@@ -379,9 +387,9 @@ def create_stt_service(
             # same language hint subset as Deepgram Flux multilingual.
             settings_kwargs = {
                 "model": "flux-general-multi",
-                "eot_timeout_ms": 800,
-                "eot_threshold": 0.7,
-                "eager_eot_threshold": 0.5,
+                "eot_timeout_ms": stt_turn["flux_eot_timeout_ms"],
+                "eot_threshold": stt_turn["flux_eot_threshold"],
+                "eager_eot_threshold": stt_turn["flux_eager_eot_threshold"],
                 "keyterm": keyterms or [],
             }
             language_hint = DEEPGRAM_FLUX_LANGUAGE_HINTS.get(language)
@@ -1075,7 +1083,11 @@ def create_llm_service_from_provider(
         raise HTTPException(status_code=400, detail=f"Invalid LLM provider {provider}")
 
 
-def create_realtime_llm_service(user_config, audio_config: "AudioConfig"):
+def create_realtime_llm_service(
+    user_config,
+    audio_config: "AudioConfig",
+    run_configs: dict | None = None,
+):
     """Create a realtime (speech-to-speech) LLM service that handles STT+LLM+TTS.
 
     These services bypass separate STT/TTS and handle audio directly via
@@ -1189,7 +1201,7 @@ def create_realtime_llm_service(user_config, audio_config: "AudioConfig"):
         }
         if language:
             settings_kwargs["language"] = language
-        settings_kwargs["vad"] = _gemini_live_vad_params()
+        settings_kwargs["vad"] = _gemini_live_vad_params(run_configs)
 
         from api.services.pipecat.google_client_options import google_retry_http_options
 
@@ -1213,7 +1225,7 @@ def create_realtime_llm_service(user_config, audio_config: "AudioConfig"):
         }
         if language:
             settings_kwargs["language"] = language
-        settings_kwargs["vad"] = _gemini_live_vad_params()
+        settings_kwargs["vad"] = _gemini_live_vad_params(run_configs)
         return DograhGeminiLiveVertexLLMService(
             credentials=credentials,
             project_id=project_id,

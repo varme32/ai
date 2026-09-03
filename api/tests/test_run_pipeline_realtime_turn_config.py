@@ -45,6 +45,19 @@ def test_gemini_live_vad_is_tuned_for_fast_barge_in():
     assert vad.silence_duration_ms == 300
 
 
+def test_gemini_live_vad_reads_workflow_configuration():
+    vad = _gemini_live_vad_params(
+        {
+            "vad_configuration": {
+                "realtime_prefix_padding_ms": 80,
+                "realtime_silence_duration_ms": 250,
+            }
+        }
+    )
+    assert vad.prefix_padding_ms == 80
+    assert vad.silence_duration_ms == 250
+
+
 def test_gemini_realtime_uses_local_vad_with_local_interruptions():
     strategies, vad_analyzer = _create_realtime_user_turn_config(
         ServiceProviders.GOOGLE_REALTIME.value

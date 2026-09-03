@@ -1,0 +1,84 @@
+---
+title: "Voice Runtime"
+description: "Tune turn-taking, VAD, STT endpointing, barge-in filtering, and tool-call fillers from the agent settings UI without changing backend code."
+---
+
+Voice runtime settings live on each agent under **Settings → General**. They are stored on the workflow and applied on every call. Switching STT, LLM, TTS, or speech-to-speech providers still happens on **Models** (or a per-agent model override). This page covers the conversational knobs that sit on top of those providers.
+
+Changing these values does not require a deploy. Saved settings apply to the next call.
+
+<Note>
+Defaults match the current production telephony profile. Existing agents keep the same latency and interruption behavior until you change a setting and save.
+</Note>
+
+## Turn detection
+
+This controls when the agent decides the caller has finished speaking.
+
+| Strategy | When to use it |
+|---|---|
+| **Transcription-based** (default) | Short answers. Ends the turn after a short silence once speech is transcribed. |
+| **Smart Turn Analyzer** | Longer answers with thinking pauses. Uses an on-device model to tell a mid-thought pause from a finished turn. |
+| **Semantic end-of-turn** | Mixed turns. Waits a short time for finished sentences (`is that okay?`) and longer for incomplete ones (`because I want...`). |
+
+**Speech timeout** (transcription-based) is the wait after the caller stops speaking. The default is `0.2s`.
+
+**Complete-sentence wait** / **Incomplete-sentence wait** apply only to semantic end-of-turn. Defaults are `0.3s` and `1.2s`.
+
+**Safety timeout** is optional. Leave it blank to keep the platform default: `1.5s` for standard STT, `30s` when the STT provider owns turn-end (Deepgram Flux and similar). Set it only if replies hang after the caller stops.
+
+<Warning>
+Do not set the safety timeout to `1.5` just to fill the field. That would override the longer Flux timeout and can cut the caller off while the transcriber is still finalizing.
+</Warning>
+
+## Interruption and backchannel filtering
+
+**Interruption strategy** is unchanged:
+
+- **Default** — barge in from transcription and local VAD
+- **Minimum words** — wait for N transcribed words before interrupting
+- **Provisional VAD** — pause the agent on voice activity, then confirm with a transcript
+
+**Filter backchannels** is off by default. When enabled, listed phrases such as `yeah`, `okay`, and `uh-huh` do not interrupt the agent while it is speaking. When the agent is silent, `okay` still counts as a real answer.
+
+Enabling the filter on the default interruption strategy switches barge-in to transcription-gated mode so raw VAD cannot beat the transcript filter.
+
+## Voice activity detection
+
+These values drive Silero VAD on cascaded calls and on Gemini Live barge-in of already-queued audio.
+
+| Field | Default | Meaning |
+|---|---|---|
+| Confidence | `0.7` | Minimum voice-confidence to count as speech |
+| Min volume | `0.6` | Minimum volume to count as speech |
+| Start window | `0.15s` | How long speech must last before a turn starts |
+| Stop window | `0.25s` | How long silence must last before a turn ends |
+| Realtime prefix padding | `100ms` | Gemini Live audio kept before detected speech |
+| Realtime silence | `300ms` | Gemini Live silence before server-side turn-end |
+
+OpenAI Realtime, Azure Realtime, and Grok Voice Agent keep using their own server VAD. The Silero fields do not apply to those providers.
+
+## Speech-to-text endpointing
+
+These are provider-level end-of-turn settings, independent of Silero VAD.
+
+| Field | Default | Used by |
+|---|---|---|
+| Endpointing | `300ms` | Deepgram Nova (non-Flux) |
+| Flux EOT timeout | `800ms` | Deepgram Flux and Dograh Flux |
+| Flux EOT threshold | `0.7` | Flux turn-end confidence |
+| Flux eager EOT threshold | `0.5` | Flux early turn-end |
+
+## Tool-call fillers
+
+Off by default. When enabled, if an HTTP tool, MCP tool, calculator, or knowledge-base lookup is still running after the delay (default `600ms`), the agent speaks one of the configured phrases:
+
+- `Let me check that.`
+- `One second.`
+- `Got it, looking that up.`
+
+If the tool finishes first, nothing is spoken. HTTP tools that already have a custom pre-call message keep that message and skip the filler. Speech-to-speech (realtime) agents skip fillers because they have no separate TTS path.
+
+## What you still change on Models
+
+Provider, model, voice, language, and API key still live on **Models** or the agent model override. Voice runtime settings do not replace those. They make the same pipeline feel faster or more patient without editing Python.

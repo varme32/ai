@@ -26,6 +26,10 @@ from api.services.pipecat.audio_model_warmup import (
     create_silero_vad_analyzer_async,
     get_warmed_vad,
 )
+from api.services.pipecat.voice_runtime import (
+    resolve_vad_params,
+    should_reuse_warmed_vad,
+)
 from api.services.pipecat.pre_call_fetch import execute_pre_call_fetch
 from api.services.workflow.dto import ReactFlowDTO
 from api.services.workflow.workflow_graph import WorkflowGraph
@@ -301,9 +305,12 @@ async def prepare_pipeline_resources(
     recordings_task = asyncio.create_task(
         db_client.has_active_recordings(workflow.organization_id)
     )
+    vad_params = resolve_vad_params(run_configs)
 
     if is_realtime:
-        llm = create_realtime_llm_service(user_config, audio_config)
+        llm = create_realtime_llm_service(
+            user_config, audio_config, run_configs=run_configs
+        )
         stt = None
         tts = None
         inference_llm = create_llm_service(
@@ -313,11 +320,11 @@ async def prepare_pipeline_resources(
         # Gemini Live still uses local Silero for barge-in. Warm it here
         # so answer does not pay the ONNX load.
         _prewarmed = get_warmed_vad()
-        if _prewarmed is not None:
+        if should_reuse_warmed_vad(_prewarmed, vad_params):
             vad_task = None
             _prewarmed_vad = _prewarmed
         else:
-            vad_task = asyncio.create_task(create_silero_vad_analyzer_async())
+            vad_task = asyncio.create_task(create_silero_vad_analyzer_async(vad_params))
             _prewarmed_vad = None
         # Run MPS correlation lookup in parallel — does not block service creation
 
@@ -339,11 +346,11 @@ async def prepare_pipeline_resources(
         )
         # Reuse pre-warmed VAD singleton if available — avoids 300-800ms ONNX load
         _prewarmed = get_warmed_vad()
-        if _prewarmed is not None:
+        if should_reuse_warmed_vad(_prewarmed, vad_params):
             vad_task = None
             _prewarmed_vad = _prewarmed
         else:
-            vad_task = asyncio.create_task(create_silero_vad_analyzer_async())
+            vad_task = asyncio.create_task(create_silero_vad_analyzer_async(vad_params))
             _prewarmed_vad = None
 
         # STT/TTS/LLM creation is synchronous (no I/O) — runs while tasks are in flight
@@ -352,6 +359,7 @@ async def prepare_pipeline_resources(
             audio_config,
             keyterms=keyterms,
             correlation_id=None,  # MPS id resolved below
+            run_configs=run_configs,
         )
         tts = create_tts_service(
             user_config,

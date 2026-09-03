@@ -17,10 +17,70 @@ export type AmbientNoiseConfiguration = Omit<
     original_filename?: string;
 };
 
-export type TurnStopStrategy = NonNullable<GeneratedWorkflowConfigurationDefaults["turn_stop_strategy"]>;
+export type TurnStopStrategy = "transcription" | "turn_analyzer" | "semantic_eot";
 export type TurnStartStrategy = NonNullable<GeneratedWorkflowConfigurationDefaults["turn_start_strategy"]>;
 export const DEFAULT_TURN_START_MIN_WORDS = 3;
 export const DEFAULT_PROVISIONAL_VAD_PAUSE_SECS = 1.5;
+export const DEFAULT_SPEECH_TIMEOUT_SECS = 0.2;
+export const DEFAULT_VAD_CONFIGURATION: VadConfiguration = {
+    confidence: 0.7,
+    min_volume: 0.6,
+    start_secs: 0.15,
+    stop_secs: 0.25,
+    realtime_prefix_padding_ms: 100,
+    realtime_silence_duration_ms: 300,
+};
+export const DEFAULT_SEMANTIC_EOT_CONFIGURATION: SemanticEotConfiguration = {
+    complete_timeout_secs: 0.3,
+    incomplete_timeout_secs: 1.2,
+};
+export const DEFAULT_STT_TURN_CONFIGURATION: SttTurnConfiguration = {
+    endpointing_ms: 300,
+    flux_eot_timeout_ms: 800,
+    flux_eot_threshold: 0.7,
+    flux_eager_eot_threshold: 0.5,
+};
+export const DEFAULT_BARGE_IN_IGNORE_PHRASES = [
+    "yeah",
+    "yep",
+    "yup",
+    "uh-huh",
+    "uh huh",
+    "okay",
+    "ok",
+    "mhm",
+    "mm-hmm",
+    "right",
+    "sure",
+    "aha",
+];
+export const DEFAULT_TOOL_FILLER_PHRASES = [
+    "Let me check that.",
+    "One second.",
+    "Got it, looking that up.",
+];
+
+export const TURN_STOP_STRATEGY_OPTIONS: Array<{
+    value: TurnStopStrategy;
+    label: string;
+    description: string;
+}> = [
+    {
+        value: "transcription",
+        label: "Transcription-based",
+        description: "End the turn after a short silence once speech is transcribed. Best for short answers.",
+    },
+    {
+        value: "turn_analyzer",
+        label: "Smart Turn Analyzer",
+        description: "Use an on-device ML model to decide if the caller paused mid-thought or finished speaking.",
+    },
+    {
+        value: "semantic_eot",
+        label: "Semantic end-of-turn",
+        description: "Wait a short time for finished sentences and longer for incomplete ones like \"because I want...\".",
+    },
+];
 
 export const TURN_START_STRATEGY_OPTIONS: Array<{
     value: TurnStartStrategy;
@@ -67,6 +127,38 @@ export interface TranscriptConfiguration {
 export interface ExternalPBXFieldMapping {
     context_path: string;
     destination_field: string;
+}
+
+export interface VadConfiguration {
+    confidence: number;
+    min_volume: number;
+    start_secs: number;
+    stop_secs: number;
+    realtime_prefix_padding_ms: number;
+    realtime_silence_duration_ms: number;
+}
+
+export interface SemanticEotConfiguration {
+    complete_timeout_secs: number;
+    incomplete_timeout_secs: number;
+}
+
+export interface SttTurnConfiguration {
+    endpointing_ms: number;
+    flux_eot_timeout_ms: number;
+    flux_eot_threshold: number;
+    flux_eager_eot_threshold: number;
+}
+
+export interface BargeInFilterConfiguration {
+    enabled: boolean;
+    ignore_phrases: string[];
+}
+
+export interface ToolFillerConfiguration {
+    enabled: boolean;
+    delay_ms: number;
+    phrases: string[];
 }
 
 export const DEFAULT_TRANSCRIPT_CONFIGURATION: TranscriptConfiguration = {
@@ -127,6 +219,13 @@ export type WorkflowConfigurations = WorkflowConfigurationBase & {
     turn_start_min_words: number;  // Minimum transcribed words required for minimum-word interruptions
     provisional_vad_pause_secs: number;  // Seconds to pause bot output while awaiting transcript confirmation
     turn_stop_strategy: TurnStopStrategy;  // Strategy for detecting end of user turn
+    speech_timeout_secs: number;
+    user_turn_stop_timeout?: number;
+    vad_configuration: VadConfiguration;
+    semantic_eot_configuration: SemanticEotConfiguration;
+    stt_turn_configuration: SttTurnConfiguration;
+    barge_in_filter: BargeInFilterConfiguration;
+    tool_filler_configuration: ToolFillerConfiguration;
     dictionary?: string;  // Comma-separated words for voice agent to listen for
     voicemail_detection?: VoicemailDetectionConfiguration;
     transcript_configuration: TranscriptConfiguration;
@@ -149,6 +248,19 @@ const FALLBACK_WORKFLOW_CONFIGURATIONS: WorkflowConfigurations = {
     turn_start_min_words: DEFAULT_TURN_START_MIN_WORDS,
     provisional_vad_pause_secs: DEFAULT_PROVISIONAL_VAD_PAUSE_SECS,
     turn_stop_strategy: 'transcription',  // Default to transcription-based detection
+    speech_timeout_secs: DEFAULT_SPEECH_TIMEOUT_SECS,
+    vad_configuration: DEFAULT_VAD_CONFIGURATION,
+    semantic_eot_configuration: DEFAULT_SEMANTIC_EOT_CONFIGURATION,
+    stt_turn_configuration: DEFAULT_STT_TURN_CONFIGURATION,
+    barge_in_filter: {
+        enabled: false,
+        ignore_phrases: DEFAULT_BARGE_IN_IGNORE_PHRASES,
+    },
+    tool_filler_configuration: {
+        enabled: false,
+        delay_ms: 600,
+        phrases: DEFAULT_TOOL_FILLER_PHRASES,
+    },
     dictionary: '',
     transcript_configuration: DEFAULT_TRANSCRIPT_CONFIGURATION,
     context_compaction_enabled: false,
@@ -193,9 +305,50 @@ export function resolveWorkflowConfigurations(
             ?? defaults?.provisional_vad_pause_secs
             ?? FALLBACK_WORKFLOW_CONFIGURATIONS.provisional_vad_pause_secs,
         turn_stop_strategy:
-            configurations?.turn_stop_strategy
-            ?? defaults?.turn_stop_strategy
+            (configurations?.turn_stop_strategy as TurnStopStrategy | undefined)
+            ?? (defaults?.turn_stop_strategy as TurnStopStrategy | undefined)
             ?? FALLBACK_WORKFLOW_CONFIGURATIONS.turn_stop_strategy,
+        speech_timeout_secs:
+            configurations?.speech_timeout_secs
+            ?? (defaults?.speech_timeout_secs as number | undefined)
+            ?? FALLBACK_WORKFLOW_CONFIGURATIONS.speech_timeout_secs,
+        user_turn_stop_timeout:
+            configurations?.user_turn_stop_timeout
+            ?? (defaults?.user_turn_stop_timeout as number | undefined)
+            ?? FALLBACK_WORKFLOW_CONFIGURATIONS.user_turn_stop_timeout,
+        vad_configuration: {
+            ...FALLBACK_WORKFLOW_CONFIGURATIONS.vad_configuration,
+            ...(defaults?.vad_configuration as Partial<VadConfiguration> | undefined),
+            ...(configurations?.vad_configuration as Partial<VadConfiguration> | undefined),
+        },
+        semantic_eot_configuration: {
+            ...FALLBACK_WORKFLOW_CONFIGURATIONS.semantic_eot_configuration,
+            ...(defaults?.semantic_eot_configuration as Partial<SemanticEotConfiguration> | undefined),
+            ...(configurations?.semantic_eot_configuration as Partial<SemanticEotConfiguration> | undefined),
+        },
+        stt_turn_configuration: {
+            ...FALLBACK_WORKFLOW_CONFIGURATIONS.stt_turn_configuration,
+            ...(defaults?.stt_turn_configuration as Partial<SttTurnConfiguration> | undefined),
+            ...(configurations?.stt_turn_configuration as Partial<SttTurnConfiguration> | undefined),
+        },
+        barge_in_filter: {
+            ...FALLBACK_WORKFLOW_CONFIGURATIONS.barge_in_filter,
+            ...(defaults?.barge_in_filter as Partial<BargeInFilterConfiguration> | undefined),
+            ...(configurations?.barge_in_filter as Partial<BargeInFilterConfiguration> | undefined),
+            ignore_phrases:
+                configurations?.barge_in_filter?.ignore_phrases
+                ?? (defaults?.barge_in_filter as BargeInFilterConfiguration | undefined)?.ignore_phrases
+                ?? FALLBACK_WORKFLOW_CONFIGURATIONS.barge_in_filter.ignore_phrases,
+        },
+        tool_filler_configuration: {
+            ...FALLBACK_WORKFLOW_CONFIGURATIONS.tool_filler_configuration,
+            ...(defaults?.tool_filler_configuration as Partial<ToolFillerConfiguration> | undefined),
+            ...(configurations?.tool_filler_configuration as Partial<ToolFillerConfiguration> | undefined),
+            phrases:
+                configurations?.tool_filler_configuration?.phrases
+                ?? (defaults?.tool_filler_configuration as ToolFillerConfiguration | undefined)?.phrases
+                ?? FALLBACK_WORKFLOW_CONFIGURATIONS.tool_filler_configuration.phrases,
+        },
         dictionary:
             configurations?.dictionary
             ?? defaults?.dictionary
