@@ -2,6 +2,7 @@
 
 import { Check, ChevronDown, Loader2, Pencil, Play, Search, Square, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 
 import { client } from "@/client/client.gen";
 import { getVoicesApiV1UserConfigurationsVoicesProviderGet } from "@/client/sdk.gen";
@@ -494,9 +495,20 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
 // ---------------------------------------------------------------------------
 
 const SEARCH_DEBOUNCE_MS = 300;
-const DEFAULT_GENDER = "female";
-const DEFAULT_ACCENT = "us";
-const DEFAULT_LANGUAGE = "en";
+const INDIAN_LANGUAGE_OPTIONS = [
+    "en-IN",
+    "hi-IN",
+    "te-IN",
+    "ta-IN",
+    "kn-IN",
+    "ml-IN",
+    "mr-IN",
+    "gu-IN",
+    "bn-IN",
+    "pa-IN",
+    "od-IN",
+    "as-IN",
+];
 
 interface Facets {
     genders: string[];
@@ -508,8 +520,24 @@ const EMPTY_FACETS: Facets = { genders: [], accents: [], languages: [] };
 const capitalize = (v: string) => v.charAt(0).toUpperCase() + v.slice(1);
 const accentLabel = (code?: string | null) =>
     code ? ACCENT_DISPLAY_NAMES[code.toLowerCase()] || capitalize(code) : "";
-const languageLabel = (code?: string | null) =>
-    code ? LANGUAGE_DISPLAY_NAMES[code] || code.toUpperCase() : "";
+const languageLabel = (code?: string | null) => {
+    if (!code) return "";
+    const candidates = [
+        code,
+        code.replace("_", "-"),
+        `${code.split(/[-_]/)[0]}-IN`,
+        code.split(/[-_]/)[0],
+    ];
+    for (const candidate of candidates) {
+        if (LANGUAGE_DISPLAY_NAMES[candidate]) return LANGUAGE_DISPLAY_NAMES[candidate];
+        const lower = candidate.toLowerCase();
+        const match = Object.entries(LANGUAGE_DISPLAY_NAMES).find(
+            ([key]) => key.toLowerCase() === lower,
+        );
+        if (match) return match[1];
+    }
+    return code.toUpperCase();
+};
 const genderLabel = (gender?: string | null) => (gender ? capitalize(gender) : "");
 
 function voiceTraits(voice: VoiceInfo): string {
@@ -571,15 +599,32 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
     const [manualVoiceId, setManualVoiceId] = useState("");
 
     const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
+    const [previewLoadingId, setPreviewLoadingId] = useState<string | null>(null);
     const audioRef = useRef<HTMLAudioElement | null>(null);
+    const previewObjectUrl = useRef<string | null>(null);
     const requestId = useRef(0);
+    const catalogKey = `${provider}:${model || ""}`;
+    const catalogKeyRef = useRef(catalogKey);
+
+    useEffect(() => {
+        if (catalogKeyRef.current === catalogKey) return;
+        catalogKeyRef.current = catalogKey;
+        setFacets(EMPTY_FACETS);
+        setVoices([]);
+        setError(null);
+    }, [catalogKey]);
 
     const stopPreview = useCallback(() => {
         if (audioRef.current) {
             audioRef.current.pause();
             audioRef.current = null;
         }
+        if (previewObjectUrl.current) {
+            URL.revokeObjectURL(previewObjectUrl.current);
+            previewObjectUrl.current = null;
+        }
         setPlayingVoiceId(null);
+        setPreviewLoadingId(null);
     }, []);
 
     useEffect(() => {
@@ -631,13 +676,22 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
                 setVoices([]);
             } else {
                 setVoices(response.data?.voices ?? []);
-                if (response.data?.facets) {
-                    setFacets({
-                        genders: response.data.facets.genders ?? [],
-                        accents: response.data.facets.accents ?? [],
-                        languages: response.data.facets.languages ?? [],
-                    });
-                }
+                const next = response.data?.facets;
+                setFacets((prev) => ({
+                    genders: Array.from(new Set([
+                        ...prev.genders,
+                        ...(next?.genders ?? []),
+                    ])),
+                    accents: Array.from(new Set([
+                        ...prev.accents,
+                        ...(next?.accents ?? []),
+                    ])),
+                    languages: Array.from(new Set([
+                        ...prev.languages,
+                        ...(next?.languages ?? []),
+                        ...INDIAN_LANGUAGE_OPTIONS,
+                    ])),
+                }));
             }
             setIsLoading(false);
         })();
@@ -655,7 +709,14 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
 
     const genderOptions = useMemo(() => toSortedOptions(facets.genders, gender, genderLabel), [facets.genders, gender]);
     const accentOptions = useMemo(() => toSortedOptions(facets.accents, accent, accentLabel), [facets.accents, accent]);
-    const languageOptions = useMemo(() => toSortedOptions(facets.languages, language, languageLabel), [facets.languages, language]);
+    const languageOptions = useMemo(
+        () => toSortedOptions(
+            Array.from(new Set([...facets.languages, ...INDIAN_LANGUAGE_OPTIONS])),
+            language,
+            languageLabel,
+        ),
+        [facets.languages, language],
+    );
 
     const openModal = () => {
         setGender(ALL_FILTER_VALUE); setAccent(ALL_FILTER_VALUE); setLanguage(ALL_FILTER_VALUE);
@@ -664,36 +725,73 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
     };
 
     const playPreview = async (voice: VoiceInfo) => {
-        if (playingVoiceId === voice.voice_id) { stopPreview(); return; }
-        stopPreview();
-        const playUrl = async (url: string) => {
-            const audio = new Audio(url);
-            audioRef.current = audio;
-            setPlayingVoiceId(voice.voice_id);
-            const clear = () => {
-                if (audioRef.current === audio) audioRef.current = null;
-                setPlayingVoiceId((cur) => (cur === voice.voice_id ? null : cur));
-            };
-            audio.onended = clear; audio.onerror = clear; audio.play().catch(clear);
-        };
-        if (voice.preview_url) {
-            await playUrl(voice.preview_url);
+        if (playingVoiceId === voice.voice_id || previewLoadingId === voice.voice_id) {
+            stopPreview();
             return;
         }
+        stopPreview();
+        setPreviewLoadingId(voice.voice_id);
         try {
             const query: Record<string, string> = { voice_id: voice.voice_id };
             if (model) query.model = model;
+            const previewLanguage =
+                language !== ALL_FILTER_VALUE ? language : voice.language || undefined;
+            if (previewLanguage) query.language = previewLanguage;
             const key = usableApiKey(apiKey);
             if (key) query.api_key = key;
+            if (voice.preview_url) query.preview_url = voice.preview_url;
             const response = await client.get({
                 url: `/api/v1/user/configurations/voices/${encodeURIComponent(provider)}/preview`,
                 query,
                 parseAs: "blob",
+                headers: { Accept: "audio/*,application/octet-stream,*/*" },
             });
-            if (response.error || !response.data) return;
-            await playUrl(URL.createObjectURL(response.data as Blob));
-        } catch {
+            if (response.error || !response.data) {
+                const detail = (response.error as { detail?: unknown } | undefined)?.detail;
+                toast.error(typeof detail === "string" ? detail : "Could not play this voice sample.");
+                setPreviewLoadingId(null);
+                return;
+            }
+            let blob = response.data as Blob;
+            if (!blob.size) {
+                toast.error("Could not play this voice sample.");
+                setPreviewLoadingId(null);
+                return;
+            }
+            if (blob.type && blob.type.includes("json")) {
+                try {
+                    const payload = JSON.parse(await blob.text()) as { detail?: string };
+                    toast.error(payload.detail || "Could not play this voice sample.");
+                } catch {
+                    toast.error("Could not play this voice sample.");
+                }
+                setPreviewLoadingId(null);
+                return;
+            }
+            if (!blob.type || !blob.type.startsWith("audio/")) {
+                blob = new Blob([blob], { type: "audio/mpeg" });
+            }
+            const objectUrl = URL.createObjectURL(blob);
+            previewObjectUrl.current = objectUrl;
+            const audio = new Audio(objectUrl);
+            audioRef.current = audio;
+            setPlayingVoiceId(voice.voice_id);
+            setPreviewLoadingId(null);
+            const clear = () => {
+                if (audioRef.current === audio) audioRef.current = null;
+                setPlayingVoiceId((cur) => (cur === voice.voice_id ? null : cur));
+            };
+            audio.onended = clear;
+            audio.onerror = () => {
+                clear();
+                toast.error("Could not play this voice sample.");
+            };
+            await audio.play();
+        } catch (err) {
+            setPreviewLoadingId(null);
             setPlayingVoiceId(null);
+            const detail = (err as { detail?: unknown } | undefined)?.detail;
+            toast.error(typeof detail === "string" ? detail : "Could not play this voice sample.");
         }
     };
 
@@ -784,6 +882,7 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
                                 {voices.map((voice) => {
                                     const isSelected = pendingVoiceId === voice.voice_id;
                                     const isPlaying = playingVoiceId === voice.voice_id;
+                                    const isPreviewLoading = previewLoadingId === voice.voice_id;
                                     return (
                                         <button type="button" key={voice.voice_id}
                                             onClick={() => setPendingVoiceId(voice.voice_id)}
@@ -796,7 +895,13 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
                                                 onClick={(e) => { e.stopPropagation(); void playPreview(voice); }}
                                                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); void playPreview(voice); } }}
                                                 className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary hover:bg-primary/20">
-                                                {isPlaying ? <Square className="h-4 w-4 fill-current" /> : <Play className="h-4 w-4 fill-current" />}
+                                                {isPreviewLoading ? (
+                                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                                ) : isPlaying ? (
+                                                    <Square className="h-4 w-4 fill-current" />
+                                                ) : (
+                                                    <Play className="h-4 w-4 fill-current" />
+                                                )}
                                             </span>
                                             <span className="flex min-w-0 flex-1 flex-col">
                                                 <span className="flex items-center gap-2">

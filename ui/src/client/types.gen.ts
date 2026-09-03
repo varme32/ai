@@ -6922,6 +6922,10 @@ export type VoiceInfo = {
      */
     language?: string | null;
     /**
+     * Languages
+     */
+    languages?: Array<string> | null;
+    /**
      * Preview Url
      */
     preview_url?: string | null;

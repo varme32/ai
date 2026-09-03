@@ -435,6 +435,7 @@ class VoiceInfo(BaseModel):
     accent: Optional[str] = None
     gender: Optional[str] = None
     language: Optional[str] = None
+    languages: Optional[List[str]] = None
     preview_url: Optional[str] = None
 
 
@@ -512,9 +513,10 @@ async def preview_voice(
     model: Optional[str] = None,
     language: Optional[str] = None,
     api_key: Optional[str] = None,
+    preview_url: Optional[str] = None,
     user: UserModel = Depends(get_user),
 ):
-    """Synthesize a short sample clip when the provider has no preview URL."""
+    """Proxy a catalog sample clip, or synthesize one when no clip URL exists."""
     from fastapi.responses import Response
 
     audio, content_type = await synthesize_voice_preview(
@@ -524,5 +526,6 @@ async def preview_voice(
         model=model,
         language=language,
         api_key_override=api_key,
+        preview_url=preview_url,
     )
     return Response(content=audio, media_type=content_type)
