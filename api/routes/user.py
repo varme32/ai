@@ -467,11 +467,14 @@ async def get_voices(
     sample: bool = False,
     preview_url: Optional[str] = None,
     user: UserModel = Depends(get_user),
-) -> Union[VoicesResponse, Response]:
+) -> VoicesResponse:
     """Get available voices for a TTS provider.
 
     Pass ``sample=true`` and ``voice_id`` to play a demo clip on this same
     path (the voice picker already uses this endpoint to list voices).
+    Returning a Starlette ``Response`` for that case is allowed at runtime
+    and must not be reflected in the annotation — FastAPI cannot build a
+    Pydantic field from ``Union[VoicesResponse, Response]``.
     """
 
     if sample:
@@ -530,7 +533,7 @@ async def get_voices(
             detail=f"Failed to fetch voices for {provider}",
         )
 
-@router.get("/configurations/voices/{provider}/preview")
+@router.get("/configurations/voices/{provider}/preview", response_model=None)
 async def preview_voice(
     provider: TTSProvider,
     voice_id: str,
