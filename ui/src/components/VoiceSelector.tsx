@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { client } from "@/client/client.gen";
 import { getVoicesApiV1UserConfigurationsVoicesProviderGet } from "@/client/sdk.gen";
 import { VoiceInfo } from "@/client/types.gen";
+import { detailFromError } from "@/lib/apiError";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -732,7 +733,10 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
         stopPreview();
         setPreviewLoadingId(voice.voice_id);
         try {
-            const query: Record<string, string> = { voice_id: voice.voice_id };
+            const query: Record<string, string> = {
+                sample: "true",
+                voice_id: voice.voice_id,
+            };
             if (model) query.model = model;
             const previewLanguage =
                 language !== ALL_FILTER_VALUE ? language : voice.language || undefined;
@@ -740,15 +744,17 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
             const key = usableApiKey(apiKey);
             if (key) query.api_key = key;
             if (voice.preview_url) query.preview_url = voice.preview_url;
+            // Same path as the working voice list so a missing /preview route
+            // cannot 404 with "Not Found".
             const response = await client.get({
-                url: `/api/v1/user/configurations/voices/${encodeURIComponent(provider)}/preview`,
+                url: "/api/v1/user/configurations/voices/{provider}",
+                path: { provider },
                 query,
                 parseAs: "blob",
                 headers: { Accept: "audio/*,application/octet-stream,*/*" },
             });
             if (response.error || !response.data) {
-                const detail = (response.error as { detail?: unknown } | undefined)?.detail;
-                toast.error(typeof detail === "string" ? detail : "Could not play this voice sample.");
+                toast.error(detailFromError(response.error, "Could not play this voice sample."));
                 setPreviewLoadingId(null);
                 return;
             }

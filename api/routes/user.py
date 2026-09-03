@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from typing import List, Literal, Optional, TypedDict, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from loguru import logger
 from pydantic import BaseModel, ValidationError
 
@@ -462,9 +463,32 @@ async def get_voices(
     gender: Optional[str] = None,
     accent: Optional[str] = None,
     api_key: Optional[str] = None,
+    voice_id: Optional[str] = None,
+    sample: bool = False,
+    preview_url: Optional[str] = None,
     user: UserModel = Depends(get_user),
-) -> VoicesResponse:
-    """Get available voices for a TTS provider."""
+) -> Union[VoicesResponse, Response]:
+    """Get available voices for a TTS provider.
+
+    Pass ``sample=true`` and ``voice_id`` to play a demo clip on this same
+    path (the voice picker already uses this endpoint to list voices).
+    """
+
+    if sample:
+        if not voice_id:
+            raise HTTPException(
+                status_code=400, detail="voice_id is required to play a sample."
+            )
+        audio, content_type = await synthesize_voice_preview(
+            provider=provider,
+            voice_id=voice_id,
+            organization_id=user.selected_organization_id,
+            model=model,
+            language=language,
+            api_key_override=api_key,
+            preview_url=preview_url,
+        )
+        return Response(content=audio, media_type=content_type)
 
     if provider in LIVE_VOICE_PROVIDERS:
         result = await list_provider_voices(
@@ -517,8 +541,6 @@ async def preview_voice(
     user: UserModel = Depends(get_user),
 ):
     """Proxy a catalog sample clip, or synthesize one when no clip URL exists."""
-    from fastapi.responses import Response
-
     audio, content_type = await synthesize_voice_preview(
         provider=provider,
         voice_id=voice_id,

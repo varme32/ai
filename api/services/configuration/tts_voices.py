@@ -67,6 +67,8 @@ _PREVIEW_HOST_SUFFIXES = (
     "cloudfront.net",
     "googleusercontent.com",
     "azureedge.net",
+    "r2.dev",
+    "blob.core.windows.net",
 )
 
 _LANGUAGE_ALIASES = {
@@ -855,6 +857,23 @@ async def synthesize_voice_preview(
     preview_url: str | None = None,
 ) -> tuple[bytes, str]:
     """Return (audio_bytes, content_type) for an on-demand sample clip."""
+    if not preview_url:
+        try:
+            catalog = await list_provider_voices(
+                provider=provider,
+                organization_id=organization_id,
+                model=model,
+                q=voice_id,
+                api_key_override=api_key_override,
+            )
+            for voice in catalog.get("voices") or []:
+                if str(voice.get("voice_id")) == str(voice_id) and voice.get(
+                    "preview_url"
+                ):
+                    preview_url = str(voice["preview_url"])
+                    break
+        except Exception:
+            logger.debug("Could not look up catalog preview URL", exc_info=True)
     catalog_clip = await _download_allowed_preview(preview_url)
     if catalog_clip:
         return catalog_clip
