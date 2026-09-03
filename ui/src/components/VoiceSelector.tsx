@@ -3,6 +3,7 @@
 import { Check, ChevronDown, Loader2, Pencil, Play, Search, Square, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { client } from "@/client/client.gen";
 import { getVoicesApiV1UserConfigurationsVoicesProviderGet } from "@/client/sdk.gen";
 import { VoiceInfo } from "@/client/types.gen";
 import { Button } from "@/components/ui/button";
@@ -105,9 +106,9 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
         try {
             const query: { model?: string; language?: string; api_key?: string } = {};
             if (model) query.model = model;
-            // For Smallest AI, always pass the current language so the voice list is pre-filtered
-            if (language) query.language = language;
-            if (apiKey && providerKey === "murf") query.api_key = apiKey;
+            // Do not pre-filter the catalog by the form language. The picker
+            // should show every voice; users can filter inside the list.
+            if (apiKey && !apiKey.includes("***")) query.api_key = apiKey;
             const response = await getVoicesApiV1UserConfigurationsVoicesProviderGet({
                 path: { provider: providerKey },
                 query: Object.keys(query).length > 0 ? query : undefined,
@@ -123,7 +124,7 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
         } finally {
             setIsLoading(false);
         }
-    }, [provider, model, language, getProviderKey]);
+    }, [provider, model, apiKey, getProviderKey]);
 
     useEffect(() => {
         if (provider) {
@@ -529,6 +530,8 @@ export interface VoiceSelectorModalProps {
     model?: string;
     allowManualInput?: boolean;
     className?: string;
+    /** Typed or saved API key. Masked saved keys are ignored; the backend uses the stored key. */
+    apiKey?: string;
 }
 
 /**
@@ -536,6 +539,11 @@ export interface VoiceSelectorModalProps {
  * filtering (gender / accent / language / search). Shares this file with
  * VoiceSelector (popover variant) to reuse the API import.
  */
+function usableApiKey(apiKey?: string): string | undefined {
+    if (!apiKey || apiKey.includes("***")) return undefined;
+    return apiKey.trim() || undefined;
+}
+
 export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
     provider,
     value,
@@ -543,6 +551,7 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
     model,
     allowManualInput = false,
     className,
+    apiKey,
 }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [voices, setVoices] = useState<VoiceInfo[]>([]);
@@ -582,37 +591,43 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
         if (!value) { setSelectedVoiceInfo(null); return; }
         let active = true;
         (async () => {
+            const query: Record<string, string> = { q: value };
+            const key = usableApiKey(apiKey);
+            if (key) query.api_key = key;
             const response = await getVoicesApiV1UserConfigurationsVoicesProviderGet({
                 path: { provider: provider as never },
-                query: { q: value },
+                query,
             });
             if (!active) return;
             const found = response.data?.voices?.find((v) => v.voice_id === value) ?? null;
             setSelectedVoiceInfo(found);
         })();
         return () => { active = false; };
-    }, [value, provider]);
+    }, [value, provider, apiKey]);
 
     useEffect(() => {
-        if (!isOpen || manualMode) return;
+        if (!provider || manualMode) return;
         const id = ++requestId.current;
         setIsLoading(true);
         setError(null);
         (async () => {
             const query: Record<string, string> = {};
             if (model) query.model = model;
-            if (gender !== ALL_FILTER_VALUE) query.gender = gender;
-            if (accent !== ALL_FILTER_VALUE) query.accent = accent;
-            if (language !== ALL_FILTER_VALUE) query.language = language;
+            if (isOpen && gender !== ALL_FILTER_VALUE) query.gender = gender;
+            if (isOpen && accent !== ALL_FILTER_VALUE) query.accent = accent;
+            if (isOpen && language !== ALL_FILTER_VALUE) query.language = language;
             const search = debouncedSearch.trim();
-            if (search) query.q = search;
+            if (isOpen && search) query.q = search;
+            const key = usableApiKey(apiKey);
+            if (key) query.api_key = key;
             const response = await getVoicesApiV1UserConfigurationsVoicesProviderGet({
                 path: { provider: provider as never },
-                query,
+                query: Object.keys(query).length ? query : undefined,
             });
             if (id !== requestId.current) return;
             if (response.error) {
-                setError("Failed to load voices");
+                const detail = (response.error as { detail?: unknown }).detail;
+                setError(typeof detail === "string" ? detail : "Failed to load voices");
                 setVoices([]);
             } else {
                 setVoices(response.data?.voices ?? []);
@@ -626,7 +641,7 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
             }
             setIsLoading(false);
         })();
-    }, [isOpen, manualMode, provider, model, gender, accent, language, debouncedSearch]);
+    }, [provider, model, isOpen, manualMode, gender, accent, language, debouncedSearch, apiKey]);
 
     useEffect(() => {
         if (!isOpen) stopPreview();
@@ -648,18 +663,38 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
         setManualVoiceId(value); setPendingVoiceId(value); setIsOpen(true);
     };
 
-    const playPreview = (voice: VoiceInfo) => {
+    const playPreview = async (voice: VoiceInfo) => {
         if (playingVoiceId === voice.voice_id) { stopPreview(); return; }
         stopPreview();
-        if (!voice.preview_url) return;
-        const audio = new Audio(voice.preview_url);
-        audioRef.current = audio;
-        setPlayingVoiceId(voice.voice_id);
-        const clear = () => {
-            if (audioRef.current === audio) audioRef.current = null;
-            setPlayingVoiceId((cur) => (cur === voice.voice_id ? null : cur));
+        const playUrl = async (url: string) => {
+            const audio = new Audio(url);
+            audioRef.current = audio;
+            setPlayingVoiceId(voice.voice_id);
+            const clear = () => {
+                if (audioRef.current === audio) audioRef.current = null;
+                setPlayingVoiceId((cur) => (cur === voice.voice_id ? null : cur));
+            };
+            audio.onended = clear; audio.onerror = clear; audio.play().catch(clear);
         };
-        audio.onended = clear; audio.onerror = clear; audio.play().catch(clear);
+        if (voice.preview_url) {
+            await playUrl(voice.preview_url);
+            return;
+        }
+        try {
+            const query: Record<string, string> = { voice_id: voice.voice_id };
+            if (model) query.model = model;
+            const key = usableApiKey(apiKey);
+            if (key) query.api_key = key;
+            const response = await client.get({
+                url: `/api/v1/user/configurations/voices/${encodeURIComponent(provider)}/preview`,
+                query,
+                parseAs: "blob",
+            });
+            if (response.error || !response.data) return;
+            await playUrl(URL.createObjectURL(response.data as Blob));
+        } catch {
+            setPlayingVoiceId(null);
+        }
     };
 
     const commitSelection = () => {
@@ -683,10 +718,16 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
                 className={cn("w-full justify-between", !value && "text-muted-foreground")}
                 onClick={openModal}>
                 <span className="flex min-w-0 items-center gap-2">
-                    <span className="truncate font-medium">{triggerLabel}</span>
+                    <span className="truncate font-medium">
+                        {isLoading && !value ? "Loading voices..." : triggerLabel}
+                    </span>
                     {triggerTraits && <span className="truncate text-xs text-muted-foreground">{triggerTraits}</span>}
                 </span>
-                <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                {isLoading ? (
+                    <Loader2 className="ml-2 h-4 w-4 shrink-0 animate-spin" />
+                ) : (
+                    <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                )}
             </Button>
 
             <Dialog open={isOpen} onOpenChange={setIsOpen}>
@@ -750,12 +791,11 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
                                                 "flex items-center gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-accent",
                                                 isSelected ? "border-primary ring-1 ring-primary" : "border-border",
                                             )}>
-                                            <span role="button" tabIndex={voice.preview_url ? 0 : -1}
+                                            <span role="button" tabIndex={0}
                                                 aria-label={isPlaying ? "Stop preview" : "Play preview"}
-                                                onClick={(e) => { e.stopPropagation(); playPreview(voice); }}
-                                                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); playPreview(voice); } }}
-                                                className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-full",
-                                                    voice.preview_url ? "bg-primary/10 text-primary hover:bg-primary/20" : "bg-muted text-muted-foreground")}>
+                                                onClick={(e) => { e.stopPropagation(); void playPreview(voice); }}
+                                                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); void playPreview(voice); } }}
+                                                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary hover:bg-primary/20">
                                                 {isPlaying ? <Square className="h-4 w-4 fill-current" /> : <Play className="h-4 w-4 fill-current" />}
                                             </span>
                                             <span className="flex min-w-0 flex-1 flex-col">

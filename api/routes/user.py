@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta
 from typing import List, Literal, Optional, TypedDict, Union
 
-import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from pydantic import BaseModel, ValidationError
@@ -30,6 +29,11 @@ from api.services.configuration.defaults import DEFAULT_SERVICE_PROVIDERS
 from api.services.configuration.masking import check_for_masked_keys, mask_user_config
 from api.services.configuration.merge import merge_user_configurations
 from api.services.configuration.registry import REGISTRY, ServiceType
+from api.services.configuration.tts_voices import (
+    LIVE_VOICE_PROVIDERS,
+    list_provider_voices,
+    synthesize_voice_preview,
+)
 from api.services.mps_service_key_client import mps_service_key_client
 from api.services.organization_preferences import (
     get_organization_preferences,
@@ -461,9 +465,9 @@ async def get_voices(
 ) -> VoicesResponse:
     """Get available voices for a TTS provider."""
 
-    # Murf uses the user's own API key stored in their config — no MPS proxy needed
-    if provider == "murf":
-        return await _get_murf_voices(
+    if provider in LIVE_VOICE_PROVIDERS:
+        result = await list_provider_voices(
+            provider=provider,
             organization_id=user.selected_organization_id,
             model=model,
             language=language,
@@ -472,15 +476,10 @@ async def get_voices(
             accent=accent,
             api_key_override=api_key,
         )
-
-    # Smallest AI voices are fetched from the public get_voices API (no auth required)
-    if provider == "smallest":
-        return await _get_smallest_voices(
-            model=model,
-            language=language,
-            q=q,
-            gender=gender,
-            accent=accent,
+        return VoicesResponse(
+            provider=result.get("provider", provider),
+            voices=[VoiceInfo(**voice) for voice in result.get("voices", [])],
+            facets=result.get("facets"),
         )
 
     try:
@@ -506,237 +505,24 @@ async def get_voices(
             detail=f"Failed to fetch voices for {provider}",
         )
 
-
-async def _get_murf_voices(
-    organization_id: int | None,
+@router.get("/configurations/voices/{provider}/preview")
+async def preview_voice(
+    provider: TTSProvider,
+    voice_id: str,
     model: Optional[str] = None,
     language: Optional[str] = None,
-    q: Optional[str] = None,
-    gender: Optional[str] = None,
-    accent: Optional[str] = None,
-    api_key_override: Optional[str] = None,
-) -> VoicesResponse:
-    """Fetch voices directly from Murf AI API using the org's stored TTS API key,
-    filtered by model (FALCON vs GEN2) and other attributes.
+    api_key: Optional[str] = None,
+    user: UserModel = Depends(get_user),
+):
+    """Synthesize a short sample clip when the provider has no preview URL."""
+    from fastapi.responses import Response
 
-    If ``api_key_override`` is provided it is used directly, allowing the
-    frontend to pass the key typed into the form before it has been saved.
-    """
-    from api.services.configuration.ai_model_configuration import (
-        get_resolved_ai_model_configuration,
+    audio, content_type = await synthesize_voice_preview(
+        provider=provider,
+        voice_id=voice_id,
+        organization_id=user.selected_organization_id,
+        model=model,
+        language=language,
+        api_key_override=api_key,
     )
-
-    api_key: str | None = api_key_override.strip() if api_key_override else None
-
-    if not api_key:
-        # Fall back to the key stored in the org's saved TTS configuration
-        resolved = await get_resolved_ai_model_configuration(organization_id=organization_id)
-        tts_config = resolved.effective.tts if resolved.effective else None
-        if tts_config and getattr(tts_config, "provider", None) == "murf":
-            raw_key = getattr(tts_config, "api_key", None)
-            if isinstance(raw_key, list):
-                api_key = raw_key[0] if raw_key else None
-            else:
-                api_key = raw_key
-
-    if not api_key:
-        raise HTTPException(
-            status_code=400,
-            detail="No Murf API key configured. Please add your Murf API key in TTS settings first.",
-        )
-
-    # Map frontend/configuration model identifier to Murf API model query param:
-    # "falcon-2" -> "FALCON"
-    # "gen2" / "GEN2" -> "GEN2"
-    params: dict[str, str] = {}
-    if model:
-        m_lower = model.lower()
-        if "falcon" in m_lower:
-            params["model"] = "FALCON"
-        elif "gen2" in m_lower or "gen-2" in m_lower:
-            params["model"] = "GEN2"
-
-    murf_url = "https://api.murf.ai/v1/speech/voices"
-    headers = {"api-key": api_key, "Accept": "application/json"}
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(murf_url, headers=headers, params=params) as resp:
-                if resp.status != 200:
-                    body = await resp.text()
-                    logger.error(f"Murf voices API error {resp.status}: {body}")
-                    raise HTTPException(
-                        status_code=502,
-                        detail=f"Murf API returned {resp.status}: {body[:200]}",
-                    )
-                data = await resp.json()
-    except aiohttp.ClientError as e:
-        raise HTTPException(status_code=502, detail=f"Failed to contact Murf API: {e}")
-
-    # Murf response: list of voice objects directly or under a key
-    raw_voices = data if isinstance(data, list) else data.get("voices", [])
-
-    voices: list[VoiceInfo] = []
-    genders_set: set[str] = set()
-    accents_set: set[str] = set()
-    languages_set: set[str] = set()
-
-    for v in raw_voices:
-        voice_id = v.get("voiceId") or v.get("voice_id") or v.get("id", "")
-        name = v.get("displayName") or v.get("name") or voice_id
-        v_gender = v.get("gender")
-        v_accent = v.get("accent")
-        v_locale = v.get("locale") or v.get("language")
-
-        if v_gender:
-            genders_set.add(v_gender.lower())
-        if v_accent:
-            accents_set.add(v_accent.lower())
-        if v_locale:
-            languages_set.add(v_locale.lower())
-
-        # Client-side / parameter filters
-        if q and q.lower() not in name.lower() and q.lower() not in voice_id.lower():
-            continue
-        if gender and v_gender and v_gender.lower() != gender.lower():
-            continue
-        if accent and v_accent and v_accent.lower() != accent.lower():
-            continue
-        if language and v_locale and not v_locale.lower().startswith(language.lower()):
-            continue
-
-        voices.append(
-            VoiceInfo(
-                voice_id=voice_id,
-                name=name,
-                description=v.get("description"),
-                accent=v_accent,
-                gender=v_gender,
-                language=v_locale,
-                preview_url=v.get("sampleAudioUrl") or v.get("preview_url"),
-            )
-        )
-
-    facets = VoiceFacets(
-        genders=sorted(list(genders_set)),
-        accents=sorted(list(accents_set)),
-        languages=sorted(list(languages_set)),
-    )
-
-    return VoicesResponse(provider="murf", voices=voices, facets=facets)
-
-
-async def _get_smallest_voices(
-    model: Optional[str] = None,
-    language: Optional[str] = None,
-    q: Optional[str] = None,
-    gender: Optional[str] = None,
-    accent: Optional[str] = None,
-) -> VoicesResponse:
-    """Fetch voices from the public Smallest AI get_voices API.
-
-    The endpoint ``GET https://api.smallest.ai/waves/v1/{model}/get_voices``
-    requires no authentication and returns the full voice catalog for that model.
-    Language names in the API response (e.g. "telugu") are converted to ISO 639-1
-    codes (e.g. "te") for consistency with our settings form.
-    """
-    from api.services.configuration.options.smallest import SMALLEST_LANGUAGE_NAME_TO_ISO
-
-    resolved_model = (model or "lightning_v3.1").replace("-", "_")
-    # Smallest AI URL uses hyphens in the path
-    model_slug = resolved_model.replace("_", "-")
-    url = f"https://api.india.smallest.ai/waves/v1/{model_slug}/get_voices"
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status != 200:
-                    body = await resp.text()
-                    logger.error(f"Smallest AI voices API error {resp.status}: {body[:200]}")
-                    raise HTTPException(
-                        status_code=502,
-                        detail=f"Smallest AI API returned {resp.status}: {body[:200]}",
-                    )
-                data = await resp.json()
-    except aiohttp.ClientError as e:
-        raise HTTPException(status_code=502, detail=f"Failed to contact Smallest AI API: {e}")
-
-    raw_voices = data.get("voices", []) if isinstance(data, dict) else data
-
-    voices: list[VoiceInfo] = []
-    genders_set: set[str] = set()
-    accents_set: set[str] = set()
-    languages_set: set[str] = set()
-
-    for v in raw_voices:
-        tags = v.get("tags", {})
-        voice_id = v.get("voiceId") or v.get("voice_id") or v.get("id", "")
-        name = v.get("displayName") or v.get("name") or voice_id
-        v_gender = tags.get("gender", "")
-        v_accent = tags.get("accent", "")
-        # API returns full language names ("telugu"); map to ISO codes ("te")
-        raw_langs: list[str] = tags.get("language") or tags.get("languages") or []
-        iso_langs = [SMALLEST_LANGUAGE_NAME_TO_ISO.get(ln.lower(), ln.lower()) for ln in raw_langs]
-
-        # Primary display language: use the first recommendedLanguage (best language for this voice),
-        # falling back to the requested language if the voice supports it, or iso_langs[0].
-        raw_recommended: list[str] = tags.get("recommendedLanguages") or []
-        recommended_iso = [SMALLEST_LANGUAGE_NAME_TO_ISO.get(r.lower(), r.lower()) for r in raw_recommended]
-        if recommended_iso:
-            primary_lang = recommended_iso[0]
-        elif language and language.lower() in iso_langs:
-            primary_lang = language.lower()
-        else:
-            primary_lang = iso_langs[0] if iso_langs else None
-
-        if v_gender:
-            genders_set.add(v_gender.lower())
-        if v_accent:
-            accents_set.add(v_accent.lower())
-        for iso in iso_langs:
-            languages_set.add(iso)
-
-        # Filter by language using recommendedLanguages (precise) or iso_langs (fallback).
-        # Smallest AI tags ALL Indic voices with every Indic language (code-switching group),
-        # so filtering by iso_langs when language="te" would return all 111 Indian voices.
-        # recommendedLanguages only lists the voice's PRIMARY languages, giving the correct ~8 Telugu voices.
-        if language:
-            lang_lower = language.lower()
-            if recommended_iso:
-                # Voice has recommended language metadata — use it for precise filtering
-                if lang_lower not in recommended_iso:
-                    continue
-            else:
-                # No recommendedLanguages — fall back to full language list
-                if lang_lower not in iso_langs:
-                    continue
-
-        # Filter by gender
-        if gender and v_gender and v_gender.lower() != gender.lower():
-            continue
-        # Filter by accent
-        if accent and v_accent and v_accent.lower() != accent.lower():
-            continue
-        # Search filter
-        if q and q.lower() not in name.lower() and q.lower() not in voice_id.lower():
-            continue
-
-        voices.append(
-            VoiceInfo(
-                voice_id=voice_id,
-                name=name,
-                gender=v_gender or None,
-                accent=v_accent or None,
-                language=primary_lang,
-            )
-        )
-
-
-    facets = VoiceFacets(
-        genders=sorted(list(genders_set)),
-        accents=sorted(list(accents_set)),
-        languages=sorted(list(languages_set)),
-    )
-
-    return VoicesResponse(provider="smallest", voices=voices, facets=facets)
-
+    return Response(content=audio, media_type=content_type)

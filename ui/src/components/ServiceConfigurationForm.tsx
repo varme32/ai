@@ -15,6 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { VoiceSelector } from "@/components/VoiceSelector";
+import { VoiceSelectorModal } from "@/components/VoiceSelectorModal";
 import { LANGUAGE_DISPLAY_NAMES } from "@/constants/languages";
 import { useUserConfig } from "@/context/UserConfigContext";
 import type { ModelOverrides } from "@/types/workflow-configurations";
@@ -704,7 +705,23 @@ export function ServiceConfigurationForm({
         );
 
         if (service === "tts" && field === "voice") {
-            if (!dropdownOptions || dropdownOptions.length === 0) {
+            const ttsProvider = (serviceProviders.tts || "").toLowerCase();
+            const liveCatalogProviders = ["cartesia", "sarvam", "murf", "smallest"];
+            if (liveCatalogProviders.includes(ttsProvider) || !dropdownOptions || dropdownOptions.length === 0) {
+                if (liveCatalogProviders.includes(ttsProvider)) {
+                    return (
+                        <VoiceSelectorModal
+                            provider={ttsProvider}
+                            value={watch(`${service}_${field}`) as string || ""}
+                            onChange={(voiceId) => {
+                                setValue(`${service}_${field}`, voiceId, { shouldDirty: true });
+                            }}
+                            model={watch("tts_model") as string || undefined}
+                            apiKey={apiKeys.tts?.[0] || undefined}
+                            allowManualInput={true}
+                        />
+                    );
+                }
                 return (
                     <VoiceSelector
                         provider={serviceProviders.tts}

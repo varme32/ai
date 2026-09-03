@@ -31,8 +31,8 @@ from pipecat.services.tts_service import InterruptibleTTSService, TextAggregatio
 from pipecat.utils.tracing.service_decorators import traced_tts
 
 
-MURF_DEFAULT_BASE_URL = "wss://global.api.murf.ai/v1/speech/stream-input"
-MURF_HTTP_STREAM_URL = "https://global.api.murf.ai/v1/speech/stream"
+MURF_DEFAULT_BASE_URL = "wss://in.api.murf.ai/v1/speech/stream-input"
+MURF_HTTP_STREAM_URL = "https://in.api.murf.ai/v1/speech/stream"
 MURF_DEFAULT_MODEL = "falcon-2"
 MURF_DEFAULT_VOICE = "Gordon"
 MURF_DEFAULT_SAMPLE_RATE = 24000
